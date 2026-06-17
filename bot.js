@@ -1,12 +1,12 @@
 import { Bot } from 'grammy';
 import { db } from './database.js';
 import dotenv from 'dotenv';
-import http from 'http';
+import https from 'https'; // ИСПРАВЛЕНО: используем https вместо http
 
 dotenv.config();
 
 if (!process.env.BOT_TOKEN) {
-  throw new Error('Критическая ошибка: BOT_TOKEN не задан в переменной окружения!');
+  throw new Error('Критическая ошибка: BOT_TOKEN не задан в переменной ocean!');
 }
 
 export const bot = new Bot(process.env.BOT_TOKEN);
@@ -18,7 +18,8 @@ const ADMIN_ID = 6511859639;
 // --- ЗАЩИТА ОТ ЗАСЫПАНИЯ ---
 const RENDER_URL = 'https://kaguya2-0-bot.onrender.com';
 setInterval(() => {
-  http.get(RENDER_URL, (res) => {
+  // ИСПРАВЛЕНО: делаем запрос через https.get, чтобы не было ошибки ERR_INVALID_PROTOCOL
+  https.get(RENDER_URL, (res) => {
     console.log(`📡 Авто-пинг: Статус ${res.statusCode}`);
   }).on('error', (err) => {
     console.error('❌ Ошибка авто-пинга:', err.message);
@@ -31,7 +32,7 @@ setInterval(() => {
 bot.command('start', async (ctx) => {
   await ctx.reply(
     '👋 **Привет! Я бот Кагуя 2.0.**\n\n' +
-    '⚙️ Здесь можно настроить свой автоответ для бизнес-аккаунта!\n\n' +
+    '⚙️ Здесь можно настроить свой автоответ для business-аккаунта!\n\n' +
     '✍️ **Как установить ТЕКСТ:**\n`/set Твой текст ответа`\n\n' +
     '🖼️ **Как установить СТИКЕР:**\n' +
     '1. Просто отправь/перешли мне любой стикер в этот чат.\n' +
@@ -109,18 +110,15 @@ bot.on('business_message', async (ctx) => {
 
     let replyText = db.getCustomReply(ownerId); 
     
-    // Получаем юзернейм клиента для отчетов админу
     const fromUser = businessMessage.from;
     const username = fromUser.username ? `@${fromUser.username}` : 'Нет юзернейма';
 
     if (replyText && replyText.startsWith('sticker:')) {
       const stickerFileId = replyText.replace('sticker:', '').trim();
       
-      // Отправляем стикер
       await ctx.api.sendSticker(chatId, stickerFileId, { business_connection_id: connectionId });
       db.saveMessage(chatId, 'assistant', `[Стикер: ${stickerFileId}]`);
       
-      // ИСПРАВЛЕНО: Теперь сюда тоже приходит полный отчет с юзернеймом клиента!
       await bot.api.sendMessage(ADMIN_ID, `🔔 **Новое сообщение в бизнесе!**\nБизнес-владелец (ID): \`${ownerId}\`\nКлиент: ${username}\nТекст: "${text}"\n🤖 Ответил стикером.`).catch(() => {});
     } else {
       if (!replyText) {
