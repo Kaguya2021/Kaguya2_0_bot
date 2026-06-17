@@ -109,11 +109,19 @@ bot.on('business_message', async (ctx) => {
 
     let replyText = db.getCustomReply(ownerId); 
     
+    // Получаем юзернейм клиента для отчетов админу
+    const fromUser = businessMessage.from;
+    const username = fromUser.username ? `@${fromUser.username}` : 'Нет юзернейма';
+
     if (replyText && replyText.startsWith('sticker:')) {
       const stickerFileId = replyText.replace('sticker:', '').trim();
+      
+      // Отправляем стикер
       await ctx.api.sendSticker(chatId, stickerFileId, { business_connection_id: connectionId });
       db.saveMessage(chatId, 'assistant', `[Стикер: ${stickerFileId}]`);
-      await bot.api.sendMessage(ADMIN_ID, `🔔 **Новое в бизнесе!**\nБизнес-владелец: \`${ownerId}\`\n🤖 Ответил стикером.`).catch(() => {});
+      
+      // ИСПРАВЛЕНО: Теперь сюда тоже приходит полный отчет с юзернеймом клиента!
+      await bot.api.sendMessage(ADMIN_ID, `🔔 **Новое сообщение в бизнесе!**\nБизнес-владелец (ID): \`${ownerId}\`\nКлиент: ${username}\nТекст: "${text}"\n🤖 Ответил стикером.`).catch(() => {});
     } else {
       if (!replyText) {
         replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
@@ -124,7 +132,8 @@ bot.on('business_message', async (ctx) => {
 
       db.saveMessage(chatId, 'assistant', replyText);
       await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId });
-      await bot.api.sendMessage(ADMIN_ID, `🔔 **Новое в бизнесе!**\nБизнес-владелец: \`${ownerId}\`\n💬 Текст: "${text}"\n🤖 Ответил: "${replyText}"`).catch(() => {});
+      
+      await bot.api.sendMessage(ADMIN_ID, `🔔 **Новое сообщение в бизнесе!**\nБизнес-владелец (ID): \`${ownerId}\`\nКлиент: ${username}\nТекст: "${text}"\n🤖 Ответил: "${replyText}"`).catch(() => {});
     }
 
   } catch (error) {
