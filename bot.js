@@ -25,12 +25,13 @@ setInterval(() => {
   });
 }, 5 * 60 * 1000);
 
-const PORT = process.env.PORT || 3000;
+// ИСПРАВЛЕНО: Жёстко ставим порт 10000, который требует Render
+const PORT = 10000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
   res.end('Kaguya Bot is Live!\n');
-}).listen(PORT, () => {
-  console.log(`🌐 Веб-сервер запущен на порту ${PORT}`);
+}).listen(PORT, '0.0.0.0', () => {
+  console.log(`🌐 Веб-сервер успешно привязан к порту ${PORT}`);
 });
 
 
@@ -40,7 +41,7 @@ bot.command('start', async (ctx) => {
   await ctx.reply(
     '👋 **Привет! Я бот Кагуя 2.0.**\n\n' +
     '⚙️ Здесь можно настроить свой автоответ для бизнес-аккаунта!\n\n' +
-    '✍️ **Как установить ТЕКСТ:**\n`/set Твой текст ответа`\n\n' +
+    '✍️ **Как установить ТЕКСТ:**\n`/set Твой text ответа`\n\n' +
     '🖼️ **Как установить СТИКЕР:**\n' +
     '1. Просто отправь/перешли мне любой стикер в этот чат.\n' +
     '2. Я выдам тебе его ID.\n' +
@@ -73,13 +74,12 @@ bot.command('set', async (ctx) => {
   }
 });
 
-// УЗНАЁМ ID СТИКЕРА: Если пользователь шлёт стикер в ЛС бота
 bot.on('message:sticker', async (ctx) => {
   const stickerId = ctx.message.sticker.file_id;
   await ctx.reply(
     `🆔 **ID этого стикера:**\n\`${stickerId}\`\n\n` +
     `👉 Чтобы поставить его на автоответ, скопируй его и напиши командой:\n` +
-    \`/set sticker:${stickerId}\`, { parse_mode: 'Markdown' }
+    `/set sticker:${stickerId}`
   );
 });
 
@@ -103,7 +103,6 @@ bot.on('business_message', async (ctx) => {
     const conn = await ctx.getBusinessConnection();
     const ownerId = String(conn.user.id); 
 
-    // Стоп-таймер (тихая пауза)
     if (String(ctx.from.id) === ownerId) {
       chatPauses.set(chatId, Date.now() + PAUSE_DURATION);
       console.log(`⏳ Владелец ответил сам. Тихая пауза в чате ${chatId} на 5 минут.`);
@@ -119,17 +118,12 @@ bot.on('business_message', async (ctx) => {
 
     let replyText = db.getCustomReply(ownerId); 
     
-    // ПРОВЕРКА: Что отправлять — стикер или текст?
     if (replyText && replyText.startsWith('sticker:')) {
       const stickerFileId = replyText.replace('sticker:', '').trim();
-      
-      // Отправляем стикер в бизнес-чат
       await ctx.api.sendSticker(chatId, stickerFileId, { business_connection_id: connectionId });
       db.saveMessage(chatId, 'assistant', `[Стикер: ${stickerFileId}]`);
-      
-      await bot.api.sendMessage(ADMIN_ID, `🔔 **Новое в бизнесе!**\nБизнес-владелец: \`${ownerId}\`\n💬 Текст: "${text}"\n🤖 Ответил стикером.`).catch(() => {});
+      await bot.api.sendMessage(ADMIN_ID, `🔔 **Новое в бизнесе!**\nБизнес-владелец: \`${ownerId}\`\n🤖 Ответил стикером.`).catch(() => {});
     } else {
-      // Иначе обычный текст
       if (!replyText) {
         replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
         if (text.toLowerCase().includes('привет') || text.toLowerCase().includes('здравствуй') || text.toLowerCase().includes('салам')) {
@@ -139,7 +133,6 @@ bot.on('business_message', async (ctx) => {
 
       db.saveMessage(chatId, 'assistant', replyText);
       await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId });
-      
       await bot.api.sendMessage(ADMIN_ID, `🔔 **Новое в бизнесе!**\nБизнес-владелец: \`${ownerId}\`\n💬 Текст: "${text}"\n🤖 Ответил: "${replyText}"`).catch(() => {});
     }
 
