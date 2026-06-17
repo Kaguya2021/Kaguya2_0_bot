@@ -1,5 +1,5 @@
 import express from 'express';
-import './bot.js';
+import { bot } from './bot.js'; 
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -9,5 +9,8 @@ app.get('/', (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`Виртуальный сервер запущен на порту ${PORT}`);
+    console.log(`Виртуальный server запущен на порту ${PORT}`);
 });
+
+bot.start();
+console.log('🚀 Бот Кагуя 2.0 успешно запущен!');

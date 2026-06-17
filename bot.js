@@ -1,4 +1,4 @@
-import { Bot, InlineKeyboard } from 'grammy';
+import { Bot } from 'grammy';
 import { db } from './database.js';
 import dotenv from 'dotenv';
 
@@ -10,14 +10,11 @@ if (!process.env.BOT_TOKEN) {
 
 export const bot = new Bot(process.env.BOT_TOKEN);
 
-// Хранилище для пауз в чатах
 const chatPauses = new Map();
-const PAUSE_DURATION = 5 * 60 * 1000; // 5 минут
+const PAUSE_DURATION = 5 * 60 * 1000; 
 
-// ТВОЙ TELEGRAM ID 
 const ADMIN_ID = 6511859639; 
 
-// --- ОБРАБОТКА КОМАНД В ЛС БОТА ---
 bot.command('start', async (ctx) => {
   await ctx.reply('👋 Привет! Я бот Кагуя 2.0. Вы можете подключить меня в настройках "Telegram для бизнеса", чтобы я работал вашим автоответчиком!');
 });
@@ -26,8 +23,11 @@ bot.command('help', async (ctx) => {
   await ctx.reply('🤖 Бот автоматически подстраивается под ваш аккаунт после подключения в разделе бизнес-автоматизации.');
 });
 
+bot.on('message:text', async (ctx) => {
+  console.log(`[ТЕСТ ЛС] Получено сообщение: ${ctx.message.text}`);
+  await ctx.reply(`✨ Кагуя на связи! В ЛС всё работает. Твой ID: ${ctx.from.id}`);
+});
 
-// --- АВТОМАТИЗАЦИЯ ЧАТОВ (TELEGRAM BUSINESS API) ---
 bot.on('business_message', async (ctx) => {
   try {
     const businessMessage = ctx.businessMessage;
@@ -37,18 +37,13 @@ bot.on('business_message', async (ctx) => {
     
     if (!text) return;
 
-    // Получаем ID человека, который владеет этим бизнес-аккаунтом
-    const businessConnection = await ctx.getBusinessConnection();
-    const OWNER_ID = businessConnection.user.id; 
-
     const fromUser = businessMessage.from;
     const username = fromUser.username ? `@${fromUser.username}` : 'Нет юзернейма';
     const fullName = `${fromUser.first_name || ''} ${fromUser.last_name || ''}`.trim();
 
-    // 1. Проверяем: если пишет сам хозяин аккаунта
-    if (businessMessage.from.id === OWNER_ID) {
-      chatPauses.set(`${OWNER_ID}_${chatId}`, Date.now() + PAUSE_DURATION);
-      console.log(`⏳ Владелец бизнес-аккаунта (${OWNER_ID}) ответил сам в чате ${chatId}. Пауза 5 мин.`);
+    if (fromUser.id === ADMIN_ID) {
+      chatPauses.set(`${ADMIN_ID}_${chatId}`, Date.now() + PAUSE_DURATION);
+      console.log(`⏳ Ты ответил сам в чате ${chatId}. Пауза автоответчика на 5 мин.`);
       
       const ownerReport = `⏳ **Автоответчик на паузе!**\n\n` +
                           `👤 Ты ответил в чате с: **${fullName}** (${username})\n` +
@@ -59,8 +54,7 @@ bot.on('business_message', async (ctx) => {
       return;
     }
 
-    // 2. Проверяем, стоит ли чат на паузе прямо сейчас
-    const pauseKey = `${OWNER_ID}_${chatId}`;
+    const pauseKey = `${ADMIN_ID}_${chatId}`;
     if (chatPauses.has(pauseKey)) {
       const pauseUntil = chatPauses.get(pauseKey);
       if (Date.now() < pauseUntil) {
@@ -71,14 +65,14 @@ bot.on('business_message', async (ctx) => {
       }
     }
 
-    console.log(`📥 Входящее от клиента для бизнес-аккаунта ${OWNER_ID} в чате ${chatId}: ${text}`);
+    console.log(`📥 Входящее от клиента в чате ${chatId}: ${text}`);
 
     db.saveMessage(chatId, 'user', text);
     const history = db.getChatHistory(chatId);
 
     let replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
 
-    if (text.toLowerCase().includes('привет') || text.toLowerCase().includes('здравствуй')) {
+    if (text.toLowerCase().includes('привет') || text.toLowerCase().includes('здравствуй') || text.toLowerCase().includes('салам')) {
       replyText = 'Привет! Я виртуальный ассистент. Мой владелец сейчас немного занят, но я передам ему ваше сообщение! 🙌';
     } else if (history.length > 2) {
       replyText = 'Я вижу, что мы активно общаемся, но мне лучше дождаться владельца аккаунта, чтобы он ответил вам точнее. Спасибо за терпение! ✨';
@@ -90,7 +84,7 @@ bot.on('business_message', async (ctx) => {
       business_connection_id: connectionId
     });
     
-    console.log(`📤 Успешно отправлен автоответ от имени аккаунта ${OWNER_ID}`);
+    console.log(`📤 Успешно отправлен автоответ в чат ${chatId}`);
 
     const clientReport = `🔔 **Новое сообщение в бизнесе!**\n\n` +
                          `👤 **Клиент:** ${fullName} (${username})\n` +
