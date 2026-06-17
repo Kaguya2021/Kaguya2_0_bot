@@ -1,5 +1,7 @@
 const userSettings = new Map(); 
 const chatContexts = new Map();
+// Новое хранилище для кастомных текстов ответов
+const customReplies = new Map(); 
 
 export const db = {
   getAutoReplyStatus: (userId) => {
@@ -13,6 +15,16 @@ export const db = {
     const current = db.getAutoReplyStatus(userId);
     userSettings.set(userId, !current);
     return !current;
+  },
+
+  // Сохранить кастомный текст для чата
+  setCustomReply: (chatId, text) => {
+    customReplies.set(chatId, text);
+  },
+
+  // Получить кастомный текст (или вернуть null, если его нет)
+  getCustomReply: (chatId) => {
+    return customReplies.get(chatId) || null;
   },
 
   saveMessage: (chatId, role, text) => {
