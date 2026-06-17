@@ -5,7 +5,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 if (!process.env.BOT_TOKEN) {
-  throw new Error('Критическая ошибка: BOT_TOKEN не задан в переменной окружения!');
+  throw new Error('Критическая ошибка: BOT_TOKEN не задан в переменной ocean!');
 }
 
 export const bot = new Bot(process.env.BOT_TOKEN);
@@ -27,7 +27,7 @@ bot.command('start', async (ctx) => {
 
 bot.command('set', async (ctx) => {
   try {
-    const userId = ctx.from.id; 
+    const userId = String(ctx.from.id); // Переводим в строку для надежности базы
     const customText = ctx.match.trim();
 
     if (!customText) {
@@ -37,7 +37,7 @@ bot.command('set', async (ctx) => {
     db.setCustomReply(userId, customText);
     await ctx.reply(`✅ **Успешно!** Твой личный автоответ сохранен:\n"${customText}"`);
     
-    if (userId !== ADMIN_ID) {
+    if (ctx.from.id !== ADMIN_ID) {
       await bot.api.sendMessage(ADMIN_ID, `⚙️ **Пользователь обновил автоответ:**\n👤 ID: \`${userId}\`\n💬 Текст: "${customText}"`).catch(() => {});
     }
   } catch (err) {
@@ -62,10 +62,10 @@ bot.on('business_message', async (ctx) => {
     if (!text) return;
 
     const conn = await ctx.getBusinessConnection();
-    const ownerId = conn.user.id;
+    const ownerId = String(conn.user.id); // ID владельца бизнес-аккаунта (строка)
 
-    // Стоп-таймер (тихая пауза без спама в ЛС)
-    if (ctx.from.id === ownerId) {
+    // Стоп-таймер (тихая пауза, если пишет сам владелец аккаунта)
+    if (String(ctx.from.id) === ownerId) {
       chatPauses.set(chatId, Date.now() + PAUSE_DURATION);
       console.log(`⏳ Владелец ответил сам. Тихая пауза в чате ${chatId} на 5 минут.`);
       return;
@@ -79,11 +79,11 @@ bot.on('business_message', async (ctx) => {
 
     db.saveMessage(chatId, 'user', text);
 
-    // ИСПРАВЛЕНО: Ищем кастомный текст по ownerId (по хозяину аккаунта, а не по ID клиента)
+    // ЖЕЛЕЗНЫЙ ПОИСК: ищем именно по ID владельца бизнес-аккаунта
     let replyText = db.getCustomReply(ownerId); 
     
     if (!replyText) {
-      // Стандартный шаблон, если ничего не настроено
+      // Стандартный шаблон, если этот бизнес-аккаунт ничего не настраивал
       replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
       if (text.toLowerCase().includes('привет') || text.toLowerCase().includes('здравствуй') || text.toLowerCase().includes('салам')) {
         replyText = 'Привет! Я виртуальный ассистент. Мой владелец сейчас немного занят, но я передам ему ваше сообщение! 🙌';
@@ -95,10 +95,10 @@ bot.on('business_message', async (ctx) => {
     // Отправляем автоответ
     await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId });
     
-    // Отчет главному админу (тебе)
+    // Отчет главному админу
     const fromUser = businessMessage.from;
     const username = fromUser.username ? `@${fromUser.username}` : 'Нет юзернейма';
-    await bot.api.sendMessage(ADMIN_ID, `🔔 **Новое сообщение в бизнесе!**\nЧат: \`${chatId}\`\nКлиент: ${username}\nТекст: "${text}"\n🤖 Ответил: "${replyText}"`).catch(() => {});
+    await bot.api.sendMessage(ADMIN_ID, `🔔 **Новое сообщение в бизнесе!**\nБизнес-владелец (ID): \`${ownerId}\`\nКлиент: ${username}\nТекст: "${text}"\n🤖 Ответил: "${replyText}"`).catch(() => {});
 
   } catch (error) {
     console.error('❌ Ошибка в бизнес-сообщении:', error);
