@@ -1,75 +1,97 @@
-import fs from 'fs';
-import path from 'path';
+import postgres from 'postgres';
+import dotenv from 'dotenv';
 
-// Если бот на Render, сохраняем в папку /data (это будет наш постоянный диск)
-// Если запускаешь на телефоне, сохранится в текущую папку проекта
-const IS_RENDER = process.env.RENDER === 'true' || fs.existsSync('/opt/render');
-const DB_DIR = IS_RENDER ? '/data' : path.resolve('./');
-const DB_FILE = path.join(DB_DIR, 'database.json');
+dotenv.config();
 
-// Проверяем наличие папки /data (на случай локальных тестов)
-if (IS_RENDER && !fs.existsSync('/data')) {
+const connectionString = process.env.DATABASE_URL;
+
+if (!connectionString) {
+  console.error('❌ Ошибка: Переменная DATABASE_URL не задана в .env или на Render!');
+}
+
+const sql = postgres(connectionString, {
+  ssl: 'require',
+  transform: {
+    undefined: null
+  }
+});
+
+async function initDb() {
   try {
-    fs.mkdirSync('/data', { recursive: true });
-  } catch (e) {
-    console.error('Не удалось создать папку /data, сохраняем локально:', e.message);
+    await sql`
+      CREATE TABLE IF NOT EXISTS custom_replies (
+        user_id TEXT PRIMARY KEY,
+        reply_text TEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS chat_history (
+        id SERIAL PRIMARY KEY,
+        chat_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        message_text TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
+
+    console.log('✨ Облачная база данных Postgres успешно инициализирована!');
+  } catch (err) {
+    console.error('❌ Ошибка инициализации таблиц в Postgres:', err.message);
   }
 }
 
+initDb();
+
 class Database {
   constructor() {
-    this.data = {
-      replies: {}, // userId -> customText
-      history: {}  // chatId -> messages[]
-    };
-    this.load();
+    this.repliesCache = new Map();
+    this.loadCache();
   }
 
-  load() {
+  async loadCache() {
     try {
-      if (fs.existsSync(DB_FILE)) {
-        const raw = fs.readFileSync(DB_FILE, 'utf8');
-        this.data = JSON.parse(raw);
-        console.log(`💾 База данных успешно загружена из: ${DB_FILE}`);
-      } else {
-        this.save();
+      const rows = await sql`SELECT user_id, reply_text FROM custom_replies`;
+      for (const row of rows) {
+        this.repliesCache.set(String(row.user_id), row.reply_text);
       }
+      console.log(`📦 Кэш автоответов загружен: ${this.repliesCache.size} записей.`);
     } catch (err) {
-      console.error('❌ Ошибка при загрузке базы данных:', err.message);
+      console.error('❌ Ошибка загрузки кэша из Postgres:', err.message);
     }
   }
 
-  save() {
+  async setCustomReply(userId, text) {
+    const uId = String(userId);
+    this.repliesCache.set(uId, text);
+
     try {
-      // Используем синхронную запись во временный файл, чтобы не повредить базу
-      const tempFile = DB_FILE + '.tmp';
-      fs.writeFileSync(tempFile, JSON.stringify(this.data, null, 2), 'utf8');
-      fs.renameSync(tempFile, DB_FILE);
+      await sql`
+        INSERT INTO custom_replies (user_id, reply_text, updated_at)
+        VALUES (${uId}, ${text}, CURRENT_TIMESTAMP)
+        ON CONFLICT (user_id) 
+        DO UPDATE SET reply_text = EXCLUDED.reply_text, updated_at = CURRENT_TIMESTAMP;
+      `;
+      console.log(`📝 Автоответ для ${uId} сохранен в облако.`);
     } catch (err) {
-      console.error('❌ Ошибка при сохранении базы данных:', err.message);
+      console.error('❌ Ошибка записи автоответа в Postgres:', err.message);
     }
-  }
-
-  setCustomReply(userId, text) {
-    this.data.replies[String(userId)] = text;
-    this.save();
   }
 
   getCustomReply(userId) {
-    return this.data.replies[String(userId)] || null;
+    return this.repliesCache.get(String(userId)) || null;
   }
 
-  saveMessage(chatId, role, text) {
-    const id = String(chatId);
-    if (!this.data.history[id]) {
-      this.data.history[id] = [];
+  async saveMessage(chatId, role, text) {
+    try {
+      await sql`
+        INSERT INTO chat_history (chat_id, role, message_text)
+        VALUES (${String(chatId)}, ${role}, ${text});
+      `;
+    } catch (err) {
+      console.error('❌ Ошибка записи истории в Postgres:', err.message);
     }
-    this.data.history[id].push({ role, text, timestamp: Date.now() });
-    // Храним только последние 50 сообщений в истории чата, чтобы файл не раздувался
-    if (this.data.history[id].length > 50) {
-      this.data.history[id].shift();
-    }
-    this.save();
   }
 }
 
