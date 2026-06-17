@@ -1,11 +1,12 @@
 import { Bot } from 'grammy';
 import { db } from './database.js';
 import dotenv from 'dotenv';
+import http from 'http'; // Добавили встроенный модуль для пинга
 
 dotenv.config();
 
 if (!process.env.BOT_TOKEN) {
-  throw new Error('Критическая ошибка: BOT_TOKEN не задан в переменной ocean!');
+  throw new Error('Критическая ошибка: BOT_TOKEN не задан в переменной окружения!');
 }
 
 export const bot = new Bot(process.env.BOT_TOKEN);
@@ -13,6 +14,31 @@ export const bot = new Bot(process.env.BOT_TOKEN);
 const chatPauses = new Map();
 const PAUSE_DURATION = 5 * 60 * 1000; 
 const ADMIN_ID = 6511859639; 
+
+// --- ЗАЩИТА ОТ ЗАСЫПАНИЯ (ПИНГОВАЛКА) ---
+// Каждые 5 минут бот будет делать легкий запрос на твой URL Render, чтобы сервер не спал
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL; // Render сам автоматически подставляет эту переменную
+if (RENDER_URL) {
+  setInterval(() => {
+    http.get(RENDER_URL, (res) => {
+      console.log(`📡 Авто-пинг для поддержания активности: Статус ${res.statusCode}`);
+    }).on('error', (err) => {
+      console.error('❌ Ошибка авто-пинга:', err.message);
+    });
+  }, 5 * 60 * 1000); // 5 минут
+} else {
+  console.log('⚠️ Переменная RENDER_EXTERNAL_URL не найдена. Если это локальный запуск — всё ок.');
+}
+
+// Простейший веб-сервер, чтобы Render видел, что порт открыт и бот работает
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Kaguya Bot is Live!\n');
+}).listen(PORT, () => {
+  console.log(`🌐 Веб-сервер запущен на порту ${PORT}`);
+});
+
 
 // --- ОБРАБОТКА КОМАНД В ЛС БОТА ---
 
@@ -27,7 +53,7 @@ bot.command('start', async (ctx) => {
 
 bot.command('set', async (ctx) => {
   try {
-    const userId = String(ctx.from.id); // Переводим в строку для надежности базы
+    const userId = String(ctx.from.id); 
     const customText = ctx.match.trim();
 
     if (!customText) {
@@ -62,9 +88,9 @@ bot.on('business_message', async (ctx) => {
     if (!text) return;
 
     const conn = await ctx.getBusinessConnection();
-    const ownerId = String(conn.user.id); // ID владельца бизнес-аккаунта (строка)
+    const ownerId = String(conn.user.id); 
 
-    // Стоп-таймер (тихая пауза, если пишет сам владелец аккаунта)
+    // Стоп-таймер (тихая пауза)
     if (String(ctx.from.id) === ownerId) {
       chatPauses.set(chatId, Date.now() + PAUSE_DURATION);
       console.log(`⏳ Владелец ответил сам. Тихая пауза в чате ${chatId} на 5 минут.`);
@@ -79,11 +105,9 @@ bot.on('business_message', async (ctx) => {
 
     db.saveMessage(chatId, 'user', text);
 
-    // ЖЕЛЕЗНЫЙ ПОИСК: ищем именно по ID владельца бизнес-аккаунта
     let replyText = db.getCustomReply(ownerId); 
     
     if (!replyText) {
-      // Стандартный шаблон, если этот бизнес-аккаунт ничего не настраивал
       replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
       if (text.toLowerCase().includes('привет') || text.toLowerCase().includes('здравствуй') || text.toLowerCase().includes('салам')) {
         replyText = 'Привет! Я виртуальный ассистент. Мой владелец сейчас немного занят, но я передам ему ваше сообщение! 🙌';
@@ -92,10 +116,8 @@ bot.on('business_message', async (ctx) => {
 
     db.saveMessage(chatId, 'assistant', replyText);
 
-    // Отправляем автоответ
     await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId });
     
-    // Отчет главному админу
     const fromUser = businessMessage.from;
     const username = fromUser.username ? `@${fromUser.username}` : 'Нет юзернейма';
     await bot.api.sendMessage(ADMIN_ID, `🔔 **Новое сообщение в бизнесе!**\nБизнес-владелец (ID): \`${ownerId}\`\nКлиент: ${username}\nТекст: "${text}"\n🤖 Ответил: "${replyText}"`).catch(() => {});
