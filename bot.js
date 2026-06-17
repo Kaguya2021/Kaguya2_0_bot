@@ -25,7 +25,6 @@ bot.command('start', async (ctx) => {
   );
 });
 
-// Команда /set: теперь каждый пользователь (включая твой твинк) настраивает текст для себя
 bot.command('set', async (ctx) => {
   try {
     const userId = ctx.from.id; 
@@ -38,7 +37,6 @@ bot.command('set', async (ctx) => {
     db.setCustomReply(userId, customText);
     await ctx.reply(`✅ **Успешно!** Твой личный автоответ сохранен:\n"${customText}"`);
     
-    // Уведомление главному админу (тебе) только о факте настройки, если это сделал другой юзер
     if (userId !== ADMIN_ID) {
       await bot.api.sendMessage(ADMIN_ID, `⚙️ **Пользователь обновил автоответ:**\n👤 ID: \`${userId}\`\n💬 Текст: "${customText}"`).catch(() => {});
     }
@@ -66,15 +64,14 @@ bot.on('business_message', async (ctx) => {
     const conn = await ctx.getBusinessConnection();
     const ownerId = conn.user.id;
 
-    // Стоп-таймер (если пишет сам владелец аккаунта)
+    // Стоп-таймер (тихая пауза без спама в ЛС)
     if (ctx.from.id === ownerId) {
       chatPauses.set(chatId, Date.now() + PAUSE_DURATION);
       console.log(`⏳ Владелец ответил сам. Тихая пауза в чате ${chatId} на 5 минут.`);
-      // МЫ СТЁРЛИ ОТПРАВКУ СООБЩЕНИЯ О ПАУЗЕ АДМИНУ — ТЕПЕРЬ ТУТ ТИШИНА 🤐
       return;
     }
 
-    // Проверяем, активна ли пауза в чате
+    // Проверяем паузу
     if (chatPauses.has(chatId)) {
       if (Date.now() < chatPauses.get(chatId)) return;
       else chatPauses.delete(chatId);
@@ -82,11 +79,11 @@ bot.on('business_message', async (ctx) => {
 
     db.saveMessage(chatId, 'user', text);
 
-    // Берем кастомный текст ответа, который этот пользователь настроил для своего аккаунта
-    let replyText = db.getCustomReply(chatId); 
+    // ИСПРАВЛЕНО: Ищем кастомный текст по ownerId (по хозяину аккаунта, а не по ID клиента)
+    let replyText = db.getCustomReply(ownerId); 
     
     if (!replyText) {
-      // Стандартный шаблон
+      // Стандартный шаблон, если ничего не настроено
       replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
       if (text.toLowerCase().includes('привет') || text.toLowerCase().includes('здравствуй') || text.toLowerCase().includes('салам')) {
         replyText = 'Привет! Я виртуальный ассистент. Мой владелец сейчас немного занят, но я передам ему ваше сообщение! 🙌';
@@ -95,10 +92,10 @@ bot.on('business_message', async (ctx) => {
 
     db.saveMessage(chatId, 'assistant', replyText);
 
-    // Отправляем автоответ в бизнес-чат
+    // Отправляем автоответ
     await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId });
     
-    // Отчет о входящем сообщении летит главному админу
+    // Отчет главному админу (тебе)
     const fromUser = businessMessage.from;
     const username = fromUser.username ? `@${fromUser.username}` : 'Нет юзернейма';
     await bot.api.sendMessage(ADMIN_ID, `🔔 **Новое сообщение в бизнесе!**\nЧат: \`${chatId}\`\nКлиент: ${username}\nТекст: "${text}"\n🤖 Ответил: "${replyText}"`).catch(() => {});
