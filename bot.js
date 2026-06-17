@@ -11,12 +11,12 @@ if (!process.env.BOT_TOKEN) {
 export const bot = new Bot(process.env.BOT_TOKEN);
 
 const chatPauses = new Map();
-const PAUSE_DURATION = 5 * 60 * 1000; // 5 минут
+const PAUSE_DURATION = 5 * 60 * 1000; 
 const ADMIN_ID = 6511859639; 
 
-// --- ОБРАБОТКА КОМАНД В ЛС БОТА ---
+// Команды в ЛС бота
 bot.command('start', async (ctx) => {
-  await ctx.reply('👋 Привет! Я бот Кагуя 2.0.\n\n⚙️ **Как установить кастомный ответ:**\n`/set [ID чата] [Текст ответа]`');
+  await ctx.reply('👋 Привет! Я бот Кагуя 2.0.\n\n⚙️ **Установить кастомный ответ:**\n`/set [ID чата] [Текст ответа]`');
 });
 
 bot.command('set', async (ctx) => {
@@ -33,7 +33,7 @@ bot.on('message:text', async (ctx) => {
   await ctx.reply(`✨ Кагуя на связи. ID этого чата: \`${ctx.chat.id}\``, { parse_mode: 'Markdown' });
 });
 
-// --- АВТОМАТИЗАЦИЯ ЧАТОВ (TELEGRAM BUSINESS API) ---
+// АВТОМАТИЗАЦИЯ БИЗНЕС-ЧАТОВ
 bot.on('business_message', async (ctx) => {
   try {
     const businessMessage = ctx.businessMessage;
@@ -43,38 +43,25 @@ bot.on('business_message', async (ctx) => {
     
     if (!text) return;
 
-    const fromUser = businessMessage.from;
+    // Официальный способ grammY узнать, кто владелец этого бизнес-аккаунта
+    const conn = await ctx.getBusinessConnection();
+    const ownerId = conn.user.id;
 
-    // ЖЕЛЕЗНАЯ ПРОВЕРКА НА ИСХОДЯЩЕЕ СООБЩЕНИЕ (Пишет сам владелец бизнеса):
-    // 1. Если отправителя нет (такое бывает у исходящих в некоторых версиях API)
-    // 2. Или ID отправителя равен твоему ADMIN_ID
-    // 3. Или ID отправителя НЕ равен ID чата (в личных чатах ID чата — это ID клиента. Если пишет не он, значит пишешь ты!)
-    const isOutgoing = !fromUser || fromUser.id === ADMIN_ID || (chatId > 0 && fromUser.id !== chatId);
-
-    if (isOutgoing) {
+    // Если ID отправителя совпадает с ID владельца аккаунта (ты пишешь твинку)
+    if (ctx.from.id === ownerId) {
       chatPauses.set(chatId, Date.now() + PAUSE_DURATION);
-      console.log(`⏳ [ПАУЗА] Владелец бизнеса сам ответил в чате ${chatId}. Автоответчик остановлен на 5 минут.`);
+      console.log(`⏳ Владелец ответил сам. Пауза автоответчика в чате ${chatId} на 5 минут.`);
       
-      const ownerReport = `⏳ **Автоответчик на паузе!**\n\nТы ответил в чате \`${chatId}\`. Бот отключен здесь на 5 минут, чтобы ты мог спокойно переписываться.`;
-      await bot.api.sendMessage(ADMIN_ID, ownerReport).catch(() => {});
+      await bot.api.sendMessage(ADMIN_ID, `⏳ **Пауза 5 минут** активирована в чате \`${chatId}\`.`).catch(() => {});
       return;
     }
 
-    // Проверяем, стоит ли этот чат на паузе прямо сейчас
+    // Проверяем паузу
     if (chatPauses.has(chatId)) {
-      const pauseUntil = chatPauses.get(chatId);
-      if (Date.now() < pauseUntil) {
-        console.log(`ℹ️ Чат ${chatId} на паузе. Бот не вмешивается.`);
-        return;
-      } else {
-        chatPauses.delete(chatId);
-      }
+      if (Date.now() < chatPauses.get(chatId)) return;
+      else chatPauses.delete(chatId);
     }
 
-    const username = fromUser.username ? `@${fromUser.username}` : 'Нет юзернейма';
-    const fullName = `${fromUser.first_name || ''} ${fromUser.last_name || ''}`.trim();
-
-    console.log(`📥 Входящее от клиента в чате ${chatId}: ${text}`);
     db.saveMessage(chatId, 'user', text);
 
     let replyText = db.getCustomReply(chatId); 
@@ -87,17 +74,14 @@ bot.on('business_message', async (ctx) => {
 
     db.saveMessage(chatId, 'assistant', replyText);
 
-    // Отправляем автоответ в бизнес-чат
-    await ctx.api.sendMessage(chatId, replyText, {
-      business_connection_id: connectionId
-    });
+    // Ответ в бизнес-чат
+    await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId });
     
-    console.log(`📤 Успешно отправлен автоответ в чат ${chatId}`);
-
-    const clientReport = `🔔 **Новое сообщение в бизнесе!**\n\n👤 **Клиент:** ${fullName} (${username})\n🆔 **ID чата:** \`${chatId}\`\n💬 **Написал:** "${text}"\n\n🤖 **Автоответ Кагуи:** "${replyText}"`;
-    await bot.api.sendMessage(ADMIN_ID, clientReport).catch(() => {});
+    const fromUser = businessMessage.from;
+    const username = fromUser.username ? `@${fromUser.username}` : 'Нет юзернейма';
+    await bot.api.sendMessage(ADMIN_ID, `🔔 **Новое сообщение!**\nЧат: \`${chatId}\`\nКлиент: ${username}\nТекст: "${text}"`).catch(() => {});
 
   } catch (error) {
-    console.error('❌ Ошибка при обработке бизнес-сообщения:', error);
+    console.error('❌ Ошибка в бизнес-сообщении:', error);
   }
 });
