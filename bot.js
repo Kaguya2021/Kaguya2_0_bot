@@ -25,15 +25,6 @@ setInterval(() => {
   });
 }, 5 * 60 * 1000);
 
-// Порт 10000 для Render
-const PORT = 10000;
-http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Kaguya Bot is Live!\n');
-}).listen(PORT, '0.0.0.0', () => {
-  console.log(`🌐 Веб-сервер успешно привязан к порту ${PORT}`);
-});
-
 
 // --- ОБРАБОТКА КОМАНД И ХЕНДЛЕРОВ В ЛС ---
 
