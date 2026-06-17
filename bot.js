@@ -1,7 +1,7 @@
 import { Bot } from 'grammy';
 import { db } from './database.js';
 import dotenv from 'dotenv';
-import http from 'http'; // Добавили встроенный модуль для пинга
+import http from 'http';
 
 dotenv.config();
 
@@ -15,22 +15,18 @@ const chatPauses = new Map();
 const PAUSE_DURATION = 5 * 60 * 1000; 
 const ADMIN_ID = 6511859639; 
 
-// --- ЗАЩИТА ОТ ЗАСЫПАНИЯ (ПИНГОВАЛКА) ---
-// Каждые 5 минут бот будет делать легкий запрос на твой URL Render, чтобы сервер не спал
-const RENDER_URL = process.env.RENDER_EXTERNAL_URL; // Render сам автоматически подставляет эту переменную
-if (RENDER_URL) {
-  setInterval(() => {
-    http.get(RENDER_URL, (res) => {
-      console.log(`📡 Авто-пинг для поддержания активности: Статус ${res.statusCode}`);
-    }).on('error', (err) => {
-      console.error('❌ Ошибка авто-пинга:', err.message);
-    });
-  }, 5 * 60 * 1000); // 5 минут
-} else {
-  console.log('⚠️ Переменная RENDER_EXTERNAL_URL не найдена. Если это локальный запуск — всё ок.');
-}
+// --- НАДЁЖНАЯ ЗАЩИТА ОТ ЗАСЫПАНИЯ (ЖЕСТКАЯ ССЫЛКА) ---
+const RENDER_URL = 'https://kaguya2-0-bot.onrender.com';
 
-// Простейший веб-сервер, чтобы Render видел, что порт открыт и бот работает
+setInterval(() => {
+  http.get(RENDER_URL, (res) => {
+    console.log(`📡 Авто-пинг (жесткий URL): Статус ${res.statusCode}`);
+  }).on('error', (err) => {
+    console.error('❌ Ошибка авто-пинга:', err.message);
+  });
+}, 5 * 60 * 1000); // Пинг каждые 5 минут
+
+// Веб-сервер для Render
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
