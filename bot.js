@@ -14,26 +14,42 @@ const chatPauses = new Map();
 const PAUSE_DURATION = 5 * 60 * 1000; 
 const ADMIN_ID = 6511859639; 
 
-// Команды в ЛС бота
+// --- СНАЧАЛА ОБРАБАТЫВАЕМ КОМАНДЫ (ЭТО ВАЖНО!) ---
+
 bot.command('start', async (ctx) => {
   await ctx.reply('👋 Привет! Я бот Кагуя 2.0.\n\n⚙️ **Установить кастомный ответ:**\n`/set [ID чата] [Текст ответа]`');
 });
 
 bot.command('set', async (ctx) => {
-  if (ctx.from.id !== ADMIN_ID) return;
-  const args = ctx.match.trim().split(' ');
-  if (args.length < 2) return await ctx.reply('❌ Ошибка. Формат: `/set [ID чата] [Текст]`');
-  const targetChatId = args[0];
-  const customText = args.slice(1).join(' ');
-  db.setCustomReply(targetChatId, customText);
-  await ctx.reply(`✅ Успешно для чата \`${targetChatId}\``);
+  try {
+    if (ctx.from.id !== ADMIN_ID) {
+      return await ctx.reply('⛔ Ошибка: Вы не являетесь администратором бота.');
+    }
+    
+    const args = ctx.match.trim().split(' ');
+    if (!ctx.match || args.length < 2) {
+      return await ctx.reply('❌ Ошибка. Формат: `/set [ID чата] [Текст]`');
+    }
+    
+    const targetChatId = args[0];
+    const customText = args.slice(1).join(' ');
+    
+    db.setCustomReply(targetChatId, customText);
+    await ctx.reply(`✅ Успешно! Для чата \`${targetChatId}\` установлен текст:\n"${customText}"`, { parse_mode: 'Markdown' });
+  } catch (err) {
+    await ctx.reply(`❌ Ошибка внутри команды set: ${err.message}`);
+  }
 });
 
+// --- ТОЛЬКО ПОТОМ ОБЫЧНЫЙ ТЕКСТ В ЛС ---
 bot.on('message:text', async (ctx) => {
-  await ctx.reply(`✨ Кагуя на связи. ID этого чата: \`${ctx.chat.id}\``, { parse_mode: 'Markdown' });
+  // Если это не команда (не начинается со слэша)
+  if (!ctx.message.text.startsWith('/')) {
+    await ctx.reply(`✨ Кагуя на связи. ID этого чата: \`${ctx.chat.id}\``, { parse_mode: 'Markdown' });
+  }
 });
 
-// АВТОМАТИЗАЦИЯ БИЗНЕС-ЧАТОВ
+// --- АВТОМАТИЗАЦИЯ БИЗНЕС-ЧАТОВ ---
 bot.on('business_message', async (ctx) => {
   try {
     const businessMessage = ctx.businessMessage;
@@ -43,11 +59,10 @@ bot.on('business_message', async (ctx) => {
     
     if (!text) return;
 
-    // Официальный способ узнать владельца
     const conn = await ctx.getBusinessConnection();
     const ownerId = conn.user.id;
 
-    // Если пишет сам владелец аккаунта (ты)
+    // Если пишет сам владелец (стоп-таймер)
     if (ctx.from.id === ownerId) {
       chatPauses.set(chatId, Date.now() + PAUSE_DURATION);
       console.log(`⏳ Владелец ответил сам. Пауза автоответчика в чате ${chatId} на 5 минут.`);
@@ -73,7 +88,6 @@ bot.on('business_message', async (ctx) => {
 
     db.saveMessage(chatId, 'assistant', replyText);
 
-    // Ответ в бизнес-чат
     await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId });
     
     const fromUser = businessMessage.from;
