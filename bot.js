@@ -43,15 +43,14 @@ bot.on('business_message', async (ctx) => {
     
     if (!text) return;
 
-    // Официальный способ grammY узнать, кто владелец этого бизнес-аккаунта
+    // Официальный способ узнать владельца
     const conn = await ctx.getBusinessConnection();
     const ownerId = conn.user.id;
 
-    // Если ID отправителя совпадает с ID владельца аккаунта (ты пишешь твинку)
+    // Если пишет сам владелец аккаунта (ты)
     if (ctx.from.id === ownerId) {
       chatPauses.set(chatId, Date.now() + PAUSE_DURATION);
       console.log(`⏳ Владелец ответил сам. Пауза автоответчика в чате ${chatId} на 5 минут.`);
-      
       await bot.api.sendMessage(ADMIN_ID, `⏳ **Пауза 5 минут** активирована в чате \`${chatId}\`.`).catch(() => {});
       return;
     }
