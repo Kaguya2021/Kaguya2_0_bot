@@ -11,7 +11,7 @@ app.get('/', (req, res) => {
 });
 
 // Настройка вебхука от Telegram
-app.use('/api/webhook', webhookCallback(bot, 'express'));
+app.post('/api/webhook', webhookCallback(bot, 'express'));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
