@@ -15,18 +15,6 @@ const chatPauses = new Map();
 const PAUSE_DURATION = 5 * 60 * 1000; 
 const ADMIN_ID = 6511859639; 
 
-// --- ЗАЩИТА ОТ ЗАСЫПАНИЯ ---
-const RENDER_URL = 'https://kaguya2-0-bot.onrender.com';
-setInterval(() => {
-  // ИСПРАВЛЕНО: делаем запрос через https.get, чтобы не было ошибки ERR_INVALID_PROTOCOL
-  https.get(RENDER_URL, (res) => {
-    console.log(`📡 Авто-пинг: Статус ${res.statusCode}`);
-  }).on('error', (err) => {
-    console.error('❌ Ошибка авто-пинга:', err.message);
-  });
-}, 5 * 60 * 1000);
-
-
 // --- ОБРАБОТКА КОМАНД И ХЕНДЛЕРОВ В ЛС ---
 
 bot.command('start', async (ctx) => {
