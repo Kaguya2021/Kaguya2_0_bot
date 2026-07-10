@@ -38,7 +38,7 @@ bot.command('set', async (ctx) => {
       return await ctx.reply('❌ Ошибка. Напиши текст или ID стикера после команды.');
     }
 
-    db.setCustomReply(userId, customText);
+    await db.setCustomReply(userId, customText);
     
     if (customText.startsWith('sticker:')) {
       await ctx.reply('✅ **Успешно!** Теперь на входящие сообщения я буду отвечать этим стикером!');
@@ -96,7 +96,7 @@ bot.on('business_message', async (ctx) => {
 
     db.saveMessage(chatId, 'user', text);
 
-    let replyText = db.getCustomReply(ownerId); 
+    let replyText = await db.getCustomReply(ownerId);
     
     const fromUser = businessMessage.from;
     const username = fromUser.username ? `@${fromUser.username}` : 'Нет юзернейма';
