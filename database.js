@@ -79,10 +79,26 @@ class Database {
     }
   }
 
-  getCustomReply(userId) {
-    return this.repliesCache.get(String(userId)) || null;
-  }
-
+    async getCustomReply(userId) {
+    const uId = String(userId);
+    // Если в локальном кэше процесса уже есть значение, отдаем его сразу
+    if (this.repliesCache.has(uId)) {
+      return this.repliesCache.get(uId);
+    }
+    
+    // Если процесса новый и кэш пуст, делаем точечный быстрый запрос в Postgres
+    try {
+      const rows = await sql`SELECT reply_text FROM custom_replies WHERE user_id = ${uId}`;
+      if (rows.length > 0) {
+        this.repliesCache.set(uId, rows[0].reply_text);
+        return rows[0].reply_text;
+      }
+    } catch (err) {
+      console.error('❌ Ошибка точечного получения автоответа:', err.message);
+    }
+    return null;
+    }
+  
   async saveMessage(chatId, role, text) {
     try {
       await sql`
