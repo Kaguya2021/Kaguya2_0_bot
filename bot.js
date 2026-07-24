@@ -106,77 +106,6 @@ bot.on('message:text', async (ctx) => {
   }
 });
 
-// --- АВТОМАТИЗАЦИЯ БИЗНЕС-ЧАТОВ ---
-bot.on('business_message', async (ctx) => {
-  try {
-    const businessMessage = ctx.businessMessage;
-    const connectionId = businessMessage.business_connection_id; 
-    const chatId = businessMessage.chat.id;
-    
-    // 1. ЗАЩИТА ОТ ЗАЦИКЛИВАНИЯ: Если сообщение отправлено ботом или от имени владельца
-    if (businessMessage.from.is_bot) {
-      console.log('🤖 Игнорируем сообщение от бота, чтобы не было зацикливания.');
-      return;
-    }
-
-    const conn = await ctx.getBusinessConnection();
-    const ownerId = conn && conn.user ? String(conn.user.id) : null;
-
-    if (!ownerId) {
-      console.error('⚠️ Не удалось определить ownerId!');
-      return;
-    }
-
-    // 2. ПРОВЕРКА ВЛАДЕЛЬЦА: Сравниваем ID отправителя с ID владельца бизнес-аккаунта
-    const senderId = String(businessMessage.from.id);
-    
-    if (senderId === ownerId) {
-      // Владелец ответил сам! Включаем паузу на 5 минут и ВЫХОДИМ!
-      chatPauses.set(chatId, Date.now() + PAUSE_DURATION);
-      console.log(`⏳ Владелец (${ownerId}) ответил сам в чате ${chatId}. Пауза 5 минут.`);
-      return;
-    }
-
-    // 3. ПРОВЕРКА ПАУЗЫ
-    if (chatPauses.has(chatId)) {
-      if (Date.now() < chatPauses.get(chatId)) {
-        console.log(`⏸️ Чат ${chatId} на паузе. Автоответ пропущен.`);
-        return;
-      } else {
-        chatPauses.delete(chatId);
-      }
-    }
-
-    // Получаем содержание
-    let incomingContent = businessMessage.text || businessMessage.caption;
-    if (!incomingContent) {
-      if (businessMessage.voice) incomingContent = '[🎤 Голосовое сообщение]';
-      else if (businessMessage.sticker) incomingContent = '[🖼️ Стикер]';
-      else if (businessMessage.photo) incomingContent = '[📷 Фотография]';
-      else incomingContent = '[Сообщение]';
-    }
-
-    db.saveMessage(chatId, 'user', incomingContent);
-
-    // Достаем сохраненную настройку ДЛЯ ВЛАДЕЛЬЦА
-    let replyText = await db.getCustomReply(ownerId);
-
-    const fromUser = businessMessage.from;
-    const username = fromUser.username ? `@${fromUser.username}` : (fromUser.first_name || 'Клиент');
-
-    // ТАЙМАУТ ПАУЗЫ ПОСЛЕ АВТООТВЕТА (чтобы бот не спамил на каждое сообщение подряд)
-    // Ставим мелкую паузу 10 секунд между автоответами в один чат
-    chatPauses.set(chatId, Date.now() + 10000);
-
-    // 1. ГОЛОСОВОЕ СООБЩЕНИЕ
-    if (replyText && replyText.startsWith('voice:')) {
-      const voiceFileId = replyText.replace('voice:', '').trim();
-      
-      await ctx.api.sendVoice(chatId, voiceFileId, { business_connection_id: connectionId });
-      db.saveMessage(chatId, 'assistant', `[Голосовое сообщение]`);
-      
-      await sendAdminLog(`🔔 <b>Новое сообщение в бизнесе!</b>\nБизнес-владелец: <code>${ownerId}</code>\nКлиент: ${username}\nТекст: "${incomingContent}"\n🤖 <b>Ответил голосовым!</b>`);
-      return;
     }
 
     // 2. СТИКЕР
@@ -210,4 +139,99 @@ bot.on('business_message', async (ctx) => {
   }
 });
 
+// --- АВТОМАТИЗАЦИЯ БИЗНЕС-ЧАТОВ ---
+bot.on('business_message', async (ctx) => {
+  try {
+    const businessMessage = ctx.businessMessage;
+    const connectionId = businessMessage.business_connection_id; 
+    const chatId = businessMessage.chat.id;
+    
+    // 1. ЗАЩИТА ОТ БОТОВ (Чтобы не было зацикливания)
+    if (businessMessage.from.is_bot) return;
 
+    const conn = await ctx.getBusinessConnection();
+    const ownerId = conn && conn.user ? String(conn.user.id) : null;
+
+    if (!ownerId) {
+      console.error('⚠️ Не удалось определить ownerId!');
+      return;
+    }
+
+    // 2. ЕСЛИ ВЛАДЕЛЕЦ ОТВЕТИЛ САМ
+    const senderId = String(businessMessage.from.id);
+    if (senderId === ownerId) {
+      await db.setPause(chatId, PAUSE_DURATION); // Пауза 5 минут в БД
+      console.log(`⏳ Владелец (${ownerId}) ответил сам. Пауза 5 минут.`);
+      return;
+    }
+
+    // 3. ПРОВЕРКА ПАУЗЫ ИЗ БД
+    const isPaused = await db.isPaused(chatId);
+    if (isPaused) {
+      console.log(`⏸️ Чат ${chatId} на паузе. Автоответ пропущен.`);
+      return;
+    }
+
+    // Достаем сохраненный ответ
+    const replyText = await db.getCustomReply(ownerId);
+    
+    // ЕСЛИ НАСТРОЙКИ НЕТ ИЛИ БД ВЕШИТ ТАЙМАУТ — ПРОСТО МОЛЧИМ (НЕ ШЛЕМ ДЕФОЛТ)
+    if (!replyText) {
+      console.log(`⚠️ Для владельца ${ownerId} нет сохранённого ответа. Бот молчит.`);
+      return;
+    }
+
+    // Получаем содержание входящего сообщения для логов
+    let incomingContent = businessMessage.text || businessMessage.caption;
+    if (!incomingContent) {
+      if (businessMessage.voice) incomingContent = '[🎤 Голосовое]';
+      else if (businessMessage.sticker) incomingContent = '[🖼️ Стикер]';
+      else if (businessMessage.photo) incomingContent = '[📷 Фото]';
+      else incomingContent = '[Сообщение]';
+    }
+
+    db.saveMessage(chatId, 'user', incomingContent);
+
+    const fromUser = businessMessage.from;
+    const username = fromUser.username ? `@${fromUser.username}` : (fromUser.first_name || 'Клиент');
+
+    // Ставим анти-спам паузу на 10 секунд в чат
+    await db.setPause(chatId, 10000);
+
+    // 1. ОТПРАВКА ГОЛОСОВОГО СООБЩЕНИЯ
+    if (replyText.startsWith('voice:')) {
+      const voiceFileId = replyText.replace('voice:', '').trim();
+      
+      await ctx.api.sendVoice(chatId, voiceFileId, { business_connection_id: connectionId });
+      db.saveMessage(chatId, 'assistant', `[Голосовое сообщение]`);
+      
+      await sendAdminLog(`🔔 <b>Новое сообщение в бизнесе!</b>\nБизнес-владелец: <code>${ownerId}</code>\nКлиент: ${username}\nПолучено: "${incomingContent}"\n🤖 <b>Ответил голосовым!</b>`);
+      return;
+    }
+
+    // 2. ОТПРАВКА СТИКЕРА
+    if (replyText.startsWith('sticker:')) {
+      const stickerFileId = replyText.replace('sticker:', '').trim();
+      
+      await ctx.api.sendSticker(chatId, stickerFileId, { business_connection_id: connectionId });
+      db.saveMessage(chatId, 'assistant', `[Стикер: ${stickerFileId}]`);
+      
+      await sendAdminLog(`🔔 <b>Новое сообщение в бизнесе!</b>\nБизнес-владелец: <code>${ownerId}</code>\nКлиент: ${username}\nПолучено: "${incomingContent}"\n🤖 <b>Ответил стикером.</b>`);
+      return;
+    }
+
+    // 3. ОТПРАВКА КАСТОМНОГО ТЕКСТА
+    db.saveMessage(chatId, 'assistant', replyText);
+    
+    await ctx.api.sendMessage(chatId, replyText, { 
+      business_connection_id: connectionId,
+      parse_mode: 'HTML' 
+    });
+    
+    const safeReply = replyText.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    await sendAdminLog(`🔔 <b>Новое сообщение в бизнесе!</b>\nБизнес-владелец: <code>${ownerId}</code>\nКлиент: ${username}\nПолучено: "${incomingContent}"\n🤖 <b>Ответил текстом:</b>\n${safeReply}`);
+
+  } catch (error) {
+    console.error('❌ Ошибка в бизнес-сообщении:', error);
+  }
+});
