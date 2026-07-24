@@ -1,4 +1,4 @@
-import { Bot } from 'grammy';
+ммmport { Bot } from 'grammy';
 import { db } from './database.js';
 import dotenv from 'dotenv';
 
