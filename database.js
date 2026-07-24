@@ -36,7 +36,6 @@ async function initDb() {
       );
     `;
 
-    // Создаём таблицу для хранения пауз
     await sql`
       CREATE TABLE IF NOT EXISTS chat_pauses (
         chat_id TEXT PRIMARY KEY,
@@ -44,7 +43,7 @@ async function initDb() {
       );
     `;
 
-    console.log('✨ Все таблицы Postgres успешно подготовлены!');
+    console.log('✨ База готовит таблицы...');
   } catch (err) {
     console.error('❌ Ошибка инициализации Postgres:', err.message);
   }
@@ -57,7 +56,6 @@ class Database {
     this.repliesCache = new Map();
   }
 
-  // Установка автоответа
   async setCustomReply(userId, text) {
     if (!userId) return;
     const uId = String(userId).trim();
@@ -70,13 +68,11 @@ class Database {
         ON CONFLICT (user_id) 
         DO UPDATE SET reply_text = EXCLUDED.reply_text, updated_at = CURRENT_TIMESTAMP;
       `;
-      console.log(`📝 [БД] Автоответ сохранен для ${uId}`);
     } catch (err) {
-      console.error('❌ Ошибка записи в Postgres:', err.message);
+      console.error('❌ Ошибка записи:', err.message);
     }
   }
 
-  // Получение автоответа
   async getCustomReply(userId) {
     if (!userId) return null;
     const uId = String(userId).trim();
@@ -93,13 +89,12 @@ class Database {
         return reply;
       }
     } catch (err) {
-      console.error('❌ Ошибка чтения из Postgres:', err.message);
+      console.error('❌ Ошибка чтения:', err.message);
     }
 
     return null;
   }
 
-  // Установка паузы в чате
   async setPause(chatId, durationMs) {
     try {
       const pauseUntil = new Date(Date.now() + durationMs);
@@ -109,13 +104,11 @@ class Database {
         ON CONFLICT (chat_id) 
         DO UPDATE SET pause_until = EXCLUDED.pause_until;
       `;
-      console.log(`⏳ [БД] Пауза для чата ${chatId} установлена до ${pauseUntil.toISOString()}`);
     } catch (err) {
-      console.error('❌ Ошибка сохранения паузы:', err.message);
+      console.error('❌ Ошибка пауз:', err.message);
     }
   }
 
-  // Проверка активна ли пауза
   async isPaused(chatId) {
     try {
       const rows = await sql`
@@ -124,12 +117,11 @@ class Database {
       `;
       return rows.length > 0;
     } catch (err) {
-      console.error('❌ Ошибка проверки паузы:', err.message);
+      console.error('❌ Ошибка проверки пауз:', err.message);
       return false;
     }
   }
 
-  // Сохранение истории сообщений
   async saveMessage(chatId, role, text) {
     try {
       await sql`
@@ -143,4 +135,3 @@ class Database {
 }
 
 export const db = new Database();
-
