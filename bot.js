@@ -5,14 +5,24 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 if (!process.env.BOT_TOKEN) {
-  throw new Error('Критическая ошибка: BOT_TOKEN не задан в переменной ocean!');
+  throw new Error('Критическая ошибка: BOT_TOKEN не задан в переменной environment!');
 }
 
 export const bot = new Bot(process.env.BOT_TOKEN);
 
 const chatPauses = new Map();
 const PAUSE_DURATION = 5 * 60 * 1000; 
-const ADMIN_ID = 6511859639; 
+
+// --- СПИСОК АДМИНОВ ---
+// 1. Твой ID | 2. ID твоего сотрудника
+const ADMIN_IDS = [6511859639, 8028803176]; 
+
+// Функция для рассылки логов всем админам
+async function sendAdminLog(text) {
+  for (const adminId of ADMIN_IDS) {
+    await bot.api.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
+  }
+}
 
 // 1. Хранилище для тех, кто сейчас добавляет голосовое сообщение (ГС)
 const waitingForVoice = new Map();
@@ -39,7 +49,6 @@ bot.command('set', async (ctx) => {
     const userId = String(ctx.from.id); 
     const customText = ctx.match.trim();
 
-    // 2. Ловим команду /set gs для установки голосового сообщения
     if (customText.toLowerCase() === 'gs') {
       waitingForVoice.set(userId, true);
       return await ctx.reply('🎤 <b>Отправьте или перешлите мне голосовое сообщение</b> для автоответчика:', { parse_mode: 'HTML' });
@@ -54,31 +63,28 @@ bot.command('set', async (ctx) => {
     if (customText.startsWith('sticker:')) {
       await ctx.reply('✅ <b>Успешно!</b> Теперь на входящие сообщения я буду отвечать этим стикером!', { parse_mode: 'HTML' });
     } else {
-      // Поддержка HTML включена при ответе пользователю
       await ctx.reply(`✅ <b>Успешно!</b> Твой личный автоответ сохранен:\n\n${customText}`, { parse_mode: 'HTML' });
     }
     
-    if (ctx.from.id !== ADMIN_ID) {
-      // Экранируем текст для админа, чтобы не было ошибок парсинга HTML
+    // Отправляем лог об изменении автоответа всем админам (если менял не админ)
+    if (!ADMIN_IDS.includes(ctx.from.id)) {
       const safeText = customText.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      await bot.api.sendMessage(ADMIN_ID, `⚙️ <b>Пользователь обновил автоответ:</b>\n👤 ID: <code>${userId}</code>\n💬 Настройка:\n${safeText}`, { parse_mode: 'HTML' }).catch(() => {});
+      await sendAdminLog(`⚙️ <b>Пользователь обновил автоответ:</b>\n👤 ID: <code>${userId}</code>\n💬 Настройка:\n${safeText}`);
     }
   } catch (err) {
     await ctx.reply(`❌ Ошибка внутри команды: ${err.message}`);
   }
 });
 
-// 3. Ловим само голосовое сообщение
 bot.on('message:voice', async (ctx) => {
   const userId = String(ctx.from.id);
   
   if (waitingForVoice.has(userId)) {
     const fileId = ctx.message.voice.file_id;
-    // Сохраняем ГС в базу так же, как стикеры, но с приставкой voice:
     const customText = `voice:${fileId}`; 
     
     await db.setCustomReply(userId, customText);
-    waitingForVoice.delete(userId); // Выключаем режим ожидания
+    waitingForVoice.delete(userId);
     
     return await ctx.reply('✅ <b>Голосовое сообщение успешно сохранено!</b> Теперь бот будет отвечать им клиентам.', { parse_mode: 'HTML' });
   }
@@ -111,7 +117,12 @@ bot.on('business_message', async (ctx) => {
     if (!text) return;
 
     const conn = await ctx.getBusinessConnection();
-    const ownerId = String(conn.user.id); 
+    const ownerId = conn && conn.user ? String(conn.user.id) : null;
+
+    if (!ownerId) {
+      console.error('⚠️ Не удалось определить ownerId для бизнес-сообщения!');
+      return;
+    }
 
     if (String(ctx.from.id) === ownerId) {
       chatPauses.set(chatId, Date.now() + PAUSE_DURATION);
@@ -128,26 +139,30 @@ bot.on('business_message', async (ctx) => {
 
     let replyText = await db.getCustomReply(ownerId);
     
+    console.log(`🔍 [БИЗНЕС] Запрос автоответа для ownerId: ${ownerId} | Найдено: "${replyText}"`);
+
     const fromUser = businessMessage.from;
     const username = fromUser.username ? `@${fromUser.username}` : 'Нет юзернейма';
 
+    // 1. Стикер
     if (replyText && replyText.startsWith('sticker:')) {
       const stickerFileId = replyText.replace('sticker:', '').trim();
       
       await ctx.api.sendSticker(chatId, stickerFileId, { business_connection_id: connectionId });
       db.saveMessage(chatId, 'assistant', `[Стикер: ${stickerFileId}]`);
       
-      await bot.api.sendMessage(ADMIN_ID, `🔔 <b>Новое сообщение в бизнесе!</b>\nБизнес-владелец (ID): <code>${ownerId}</code>\nКлиент: ${username}\nТекст: "${text}"\n🤖 Ответил стикером.`, { parse_mode: 'HTML' }).catch(() => {});
+      await sendAdminLog(`🔔 <b>Новое сообщение в бизнесе!</b>\nБизнес-владелец (ID): <code>${ownerId}</code>\nКлиент: ${username}\nТекст: "${text}"\n🤖 Ответил стикером.`);
       
+    // 2. Голосовое
     } else if (replyText && replyText.startsWith('voice:')) {
-      // 4. Логика отправки голосового сообщения клиенту
       const voiceFileId = replyText.replace('voice:', '').trim();
       
       await ctx.api.sendVoice(chatId, voiceFileId, { business_connection_id: connectionId });
       db.saveMessage(chatId, 'assistant', `[Голосовое сообщение]`);
       
-      await bot.api.sendMessage(ADMIN_ID, `🔔 <b>Новое сообщение в бизнесе!</b>\nБизнес-владелец (ID): <code>${ownerId}</code>\nКлиент: ${username}\nТекст: "${text}"\n🤖 Ответил голосовым сообщением.`, { parse_mode: 'HTML' }).catch(() => {});
+      await sendAdminLog(`🔔 <b>Новое сообщение в бизнесе!</b>\nБизнес-владелец (ID): <code>${ownerId}</code>\nКлиент: ${username}\nТекст: "${text}"\n🤖 Ответил голосовым сообщением.`);
       
+    // 3. Текст
     } else {
       if (!replyText) {
         replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
@@ -158,14 +173,13 @@ bot.on('business_message', async (ctx) => {
 
       db.saveMessage(chatId, 'assistant', replyText);
       
-      // 5. Отправка текста с включенным parse_mode HTML
       await ctx.api.sendMessage(chatId, replyText, { 
         business_connection_id: connectionId,
-        parse_mode: 'HTML' // Включаем поддержку шрифтов и цитат!
+        parse_mode: 'HTML' 
       });
       
       const safeReply = replyText.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      await bot.api.sendMessage(ADMIN_ID, `🔔 <b>Новое сообщение в бизнесе!</b>\nБизнес-владелец (ID): <code>${ownerId}</code>\nКлиент: ${username}\nТекст: "${text}"\n🤖 Ответил:\n${safeReply}`, { parse_mode: 'HTML' }).catch(() => {});
+      await sendAdminLog(`🔔 <b>Новое сообщение в бизнесе!</b>\nБизнес-владелец (ID): <code>${ownerId}</code>\nКлиент: ${username}\nТекст: "${text}"\n🤖 Ответил:\n${safeReply}`);
     }
 
   } catch (error) {
