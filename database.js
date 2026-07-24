@@ -6,28 +6,61 @@ dotenv.config();
 const connectionString = process.env.DATABASE_URL;
 
 if (!connectionString) {
-  console.error('❌ КРИТИЧЕСКАЯ ОШИБКА: DATABASE_URL не найден в process.env!');
+  console.error('❌ Ошибка: DATABASE_URL не задан!');
 }
 
-// Настраиваем подключение с таймаутами для Serverless (Vercel)
 const sql = postgres(connectionString, {
-  ssl: { rejectUnauthorized: false }, // Обход строгого SSL для Supabase/Neon/Render Postgres
+  ssl: { rejectUnauthorized: false },
   connect_timeout: 10,
   idle_timeout: 15,
   max: 10
 });
+
+async function initDb() {
+  try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS custom_replies (
+        user_id TEXT PRIMARY KEY,
+        reply_text TEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS chat_history (
+        id SERIAL PRIMARY KEY,
+        chat_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        message_text TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
+
+    // Создаём таблицу для хранения пауз
+    await sql`
+      CREATE TABLE IF NOT EXISTS chat_pauses (
+        chat_id TEXT PRIMARY KEY,
+        pause_until TIMESTAMP NOT NULL
+      );
+    `;
+
+    console.log('✨ Все таблицы Postgres успешно подготовлены!');
+  } catch (err) {
+    console.error('❌ Ошибка инициализации Postgres:', err.message);
+  }
+}
+
+initDb();
 
 class Database {
   constructor() {
     this.repliesCache = new Map();
   }
 
-  // Запись автоответа
+  // Установка автоответа
   async setCustomReply(userId, text) {
     if (!userId) return;
     const uId = String(userId).trim();
-    
-    // Сразу обновляем локальный кэш
     this.repliesCache.set(uId, text);
 
     try {
@@ -37,41 +70,66 @@ class Database {
         ON CONFLICT (user_id) 
         DO UPDATE SET reply_text = EXCLUDED.reply_text, updated_at = CURRENT_TIMESTAMP;
       `;
-      console.log(`✅ [БД] Автоответ сохранен для ID: ${uId}`);
+      console.log(`📝 [БД] Автоответ сохранен для ${uId}`);
     } catch (err) {
-      console.error(`❌ [БД Ошибка записи] ID ${uId}:`, err.message);
+      console.error('❌ Ошибка записи в Postgres:', err.message);
     }
   }
 
-  // Чтение автоответа
+  // Получение автоответа
   async getCustomReply(userId) {
     if (!userId) return null;
     const uId = String(userId).trim();
 
-    // 1. Проверяем кэш
     if (this.repliesCache.has(uId)) {
-      console.log(`🎯 [БД] Ответ для ${uId} взят из КЭША`);
       return this.repliesCache.get(uId);
     }
-    
-    // 2. Читаем из Postgres
+
     try {
       const rows = await sql`SELECT reply_text FROM custom_replies WHERE user_id = ${uId}`;
       if (rows && rows.length > 0) {
         const reply = rows[0].reply_text;
         this.repliesCache.set(uId, reply);
-        console.log(`📥 [БД] Ответ для ${uId} загружен из POSTGRES: "${reply}"`);
         return reply;
-      } else {
-        console.log(`⚠️ [БД] Запись для ${uId} в базах данных НЕ НАЙДЕНА.`);
       }
     } catch (err) {
-      console.error(`❌ [БД Ошибка чтения] ID ${uId}:`, err.message);
+      console.error('❌ Ошибка чтения из Postgres:', err.message);
     }
 
     return null;
   }
-  
+
+  // Установка паузы в чате
+  async setPause(chatId, durationMs) {
+    try {
+      const pauseUntil = new Date(Date.now() + durationMs);
+      await sql`
+        INSERT INTO chat_pauses (chat_id, pause_until)
+        VALUES (${String(chatId)}, ${pauseUntil})
+        ON CONFLICT (chat_id) 
+        DO UPDATE SET pause_until = EXCLUDED.pause_until;
+      `;
+      console.log(`⏳ [БД] Пауза для чата ${chatId} установлена до ${pauseUntil.toISOString()}`);
+    } catch (err) {
+      console.error('❌ Ошибка сохранения паузы:', err.message);
+    }
+  }
+
+  // Проверка активна ли пауза
+  async isPaused(chatId) {
+    try {
+      const rows = await sql`
+        SELECT pause_until FROM chat_pauses 
+        WHERE chat_id = ${String(chatId)} AND pause_until > CURRENT_TIMESTAMP;
+      `;
+      return rows.length > 0;
+    } catch (err) {
+      console.error('❌ Ошибка проверки паузы:', err.message);
+      return false;
+    }
+  }
+
+  // Сохранение истории сообщений
   async saveMessage(chatId, role, text) {
     try {
       await sql`
