@@ -6,64 +6,28 @@ dotenv.config();
 const connectionString = process.env.DATABASE_URL;
 
 if (!connectionString) {
-  console.error('❌ Ошибка: Переменная DATABASE_URL не задана в .env или на Render!');
+  console.error('❌ КРИТИЧЕСКАЯ ОШИБКА: DATABASE_URL не найден в process.env!');
 }
 
+// Настраиваем подключение с таймаутами для Serverless (Vercel)
 const sql = postgres(connectionString, {
-  ssl: 'require',
-  transform: {
-    undefined: null
-  }
+  ssl: { rejectUnauthorized: false }, // Обход строгого SSL для Supabase/Neon/Render Postgres
+  connect_timeout: 10,
+  idle_timeout: 15,
+  max: 10
 });
-
-async function initDb() {
-  try {
-    await sql`
-      CREATE TABLE IF NOT EXISTS custom_replies (
-        user_id TEXT PRIMARY KEY,
-        reply_text TEXT NOT NULL,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `;
-
-    await sql`
-      CREATE TABLE IF NOT EXISTS chat_history (
-        id SERIAL PRIMARY KEY,
-        chat_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        message_text TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `;
-
-    console.log('✨ Облачная база данных Postgres успешно инициализирована!');
-  } catch (err) {
-    console.error('❌ Ошибка инициализации таблиц в Postgres:', err.message);
-  }
-}
-
-initDb();
 
 class Database {
   constructor() {
     this.repliesCache = new Map();
-    this.loadCache();
   }
 
-  async loadCache() {
-    try {
-      const rows = await sql`SELECT user_id, reply_text FROM custom_replies`;
-      for (const row of rows) {
-        this.repliesCache.set(String(row.user_id), row.reply_text);
-      }
-      console.log(`📦 Кэш автоответов загружен: ${this.repliesCache.size} записей.`);
-    } catch (err) {
-      console.error('❌ Ошибка загрузки кэша из Postgres:', err.message);
-    }
-  }
-
+  // Запись автоответа
   async setCustomReply(userId, text) {
-    const uId = String(userId);
+    if (!userId) return;
+    const uId = String(userId).trim();
+    
+    // Сразу обновляем локальный кэш
     this.repliesCache.set(uId, text);
 
     try {
@@ -73,31 +37,40 @@ class Database {
         ON CONFLICT (user_id) 
         DO UPDATE SET reply_text = EXCLUDED.reply_text, updated_at = CURRENT_TIMESTAMP;
       `;
-      console.log(`📝 Автоответ для ${uId} сохранен в облако.`);
+      console.log(`✅ [БД] Автоответ сохранен для ID: ${uId}`);
     } catch (err) {
-      console.error('❌ Ошибка записи автоответа в Postgres:', err.message);
+      console.error(`❌ [БД Ошибка записи] ID ${uId}:`, err.message);
     }
   }
 
-    async getCustomReply(userId) {
-    const uId = String(userId);
-    // Если в локальном кэше процесса уже есть значение, отдаем его сразу
+  // Чтение автоответа
+  async getCustomReply(userId) {
+    if (!userId) return null;
+    const uId = String(userId).trim();
+
+    // 1. Проверяем кэш
     if (this.repliesCache.has(uId)) {
+      console.log(`🎯 [БД] Ответ для ${uId} взят из КЭША`);
       return this.repliesCache.get(uId);
     }
     
-    // Если процесса новый и кэш пуст, делаем точечный быстрый запрос в Postgres
+    // 2. Читаем из Postgres
     try {
       const rows = await sql`SELECT reply_text FROM custom_replies WHERE user_id = ${uId}`;
-      if (rows.length > 0) {
-        this.repliesCache.set(uId, rows[0].reply_text);
-        return rows[0].reply_text;
+      if (rows && rows.length > 0) {
+        const reply = rows[0].reply_text;
+        this.repliesCache.set(uId, reply);
+        console.log(`📥 [БД] Ответ для ${uId} загружен из POSTGRES: "${reply}"`);
+        return reply;
+      } else {
+        console.log(`⚠️ [БД] Запись для ${uId} в базах данных НЕ НАЙДЕНА.`);
       }
     } catch (err) {
-      console.error('❌ Ошибка точечного получения автоответа:', err.message);
+      console.error(`❌ [БД Ошибка чтения] ID ${uId}:`, err.message);
     }
+
     return null;
-    }
+  }
   
   async saveMessage(chatId, role, text) {
     try {
@@ -106,9 +79,10 @@ class Database {
         VALUES (${String(chatId)}, ${role}, ${text});
       `;
     } catch (err) {
-      console.error('❌ Ошибка записи истории в Postgres:', err.message);
+      console.error('❌ Ошибка записи истории:', err.message);
     }
   }
 }
 
 export const db = new Database();
+
