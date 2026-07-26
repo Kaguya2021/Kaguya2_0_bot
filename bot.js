@@ -78,35 +78,45 @@ bot.on('business_message', async (ctx) => {
     const businessMessage = ctx.businessMessage;
     const connectionId = businessMessage.business_connection_id; 
     const chatId = businessMessage.chat.id;
+    const senderId = String(businessMessage.from.id);
     
+    // 1. ИГНОРИРУЕМ БОТОВ
     if (businessMessage.from.is_bot) return;
 
+    // Получаем владельца бизнес-аккаунта
     const conn = await ctx.getBusinessConnection();
     const ownerId = conn && conn.user ? String(conn.user.id) : null;
 
     if (!ownerId) return;
 
-    const senderId = String(businessMessage.from.id);
+    // 2. ЖЕЛЕЗОБЕТОННАЯ ЗАЩИТА: ЕСЛИ ПИШЕШЬ ТЫ САМ — БОТ МОЛЧИТ!
     if (senderId === ownerId) {
       await db.setPause(chatId, PAUSE_DURATION).catch(() => {});
-      console.log(`⏳ Владелец (${ownerId}) ответил сам. Пауза 5 минут.`);
+      console.log(`🛑 Владелец (${ownerId}) написал сам! Ставим паузу 5 минут и МОЛЧИМ.`);
+      return; // <-- Выходим из функции, бот не отвечает!
+    }
+
+    // 3. ПРОВЕРКА ПАУЗЫ (Если чат на паузе после твоего ответа — бот молчит)
+    const isPaused = await db.isPaused(chatId).catch(() => false);
+    if (isPaused) {
+      console.log(`⏸️ Чат ${chatId} на паузе. Автоответ пропущен.`);
       return;
     }
 
-    const isPaused = await db.isPaused(chatId).catch(() => false);
-    if (isPaused) return;
-
+    // Достаем кастомный ответ из базы
     let replyText = await db.getCustomReply(ownerId);
 
+    // Фиксируем входящее сообщение от клиента
     let incomingContent = businessMessage.text || businessMessage.caption || '[Медиа]';
     db.saveMessage(chatId, 'user', incomingContent);
 
     const fromUser = businessMessage.from;
     const username = fromUser.username ? `@${fromUser.username}` : (fromUser.first_name || 'Клиент');
 
+    // Ставим анти-спам паузу на 10 секунд (чтобы бот не спамил при частых сообщениях клиента)
     await db.setPause(chatId, 10000).catch(() => {});
 
-    // 1. ГОЛОСОВОЕ
+    // 1. ЕСЛИ НАСТРОЕНО ГС
     if (replyText && replyText.startsWith('voice:')) {
       const voiceFileId = replyText.replace('voice:', '').trim();
       await ctx.api.sendVoice(chatId, voiceFileId, { business_connection_id: connectionId });
@@ -115,7 +125,7 @@ bot.on('business_message', async (ctx) => {
       return;
     }
 
-    // 2. СТИКЕР
+    // 2. ЕСЛИ НАСТРОЕН СТИКЕР
     if (replyText && replyText.startsWith('sticker:')) {
       const stickerFileId = replyText.replace('sticker:', '').trim();
       await ctx.api.sendSticker(chatId, stickerFileId, { business_connection_id: connectionId });
@@ -124,12 +134,12 @@ bot.on('business_message', async (ctx) => {
       return;
     }
 
-    // 3. ДЕФОЛТНЫЙ ТЕКСТ
+    // 3. ЕСЛИ НЕТ НАСТРОЕК — ДЕФОЛТ
     if (!replyText) {
       replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
     }
 
-    // 4. ТЕКСТ
+    // 4. ТЕКСТОВЫЙ ОТВЕТ
     db.saveMessage(chatId, 'assistant', replyText);
     await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
     
@@ -140,3 +150,4 @@ bot.on('business_message', async (ctx) => {
     console.error('❌ Ошибка в бизнес-сообщении:', error);
   }
 });
+
