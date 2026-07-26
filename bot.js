@@ -10,19 +10,11 @@ if (!process.env.BOT_TOKEN) {
 
 export const bot = new Bot(process.env.BOT_TOKEN);
 
-const PAUSE_DURATION = 5 * 60 * 1000; // Пауза 5 минут при твоем ответе
-const ADMIN_IDS = [6511859639, 8028803176]; 
+const PAUSE_DURATION = 5 * 60 * 1000; 
 
-// Локальный кэш в памяти (защита от тупящей базы данных)
+// Локальный кэш
 const processedMessages = new Set();
 const localPauses = new Map();
-
-async function sendAdminLog(text) {
-  for (const adminId of ADMIN_IDS) {
-    await bot.api.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
-  }
-}
-
 const waitingForVoice = new Map();
 
 // --- КОМАНДЫ В ЛИЧКЕ С БОТОМ ---
@@ -59,7 +51,7 @@ bot.command('set', async (ctx) => {
 });
 
 bot.on('message:voice', async (ctx) => {
-  if (ctx.businessMessage) return; // Игнорируем голосовухи из бизнес-чатов
+  if (ctx.businessMessage) return;
 
   const userId = String(ctx.from.id);
   if (waitingForVoice.has(userId)) {
@@ -71,7 +63,7 @@ bot.on('message:voice', async (ctx) => {
 });
 
 bot.on('message:sticker', async (ctx) => {
-  if (ctx.businessMessage) return; // Игнорируем стикеры из бизнес-чатов
+  if (ctx.businessMessage) return;
 
   const stickerId = ctx.message.sticker.file_id;
   await ctx.reply(
@@ -92,84 +84,66 @@ bot.on('business_message', async (ctx) => {
     const messageId = businessMessage.message_id;
     const senderId = String(businessMessage.from.id);
 
-    // 1. ИГНОРИРУЕМ БОТОВ
     if (businessMessage.from.is_bot) return;
 
-    // 2. ЗАЩИТА ОТ ДУБЛЕЙ ВЕБХУКА
+    // ЗАЩИТА ОТ ДУБЛЕЙ
     const uniqueKey = `${chatId}:${messageId}`;
     if (processedMessages.has(uniqueKey)) return;
     processedMessages.add(uniqueKey);
     setTimeout(() => processedMessages.delete(uniqueKey), 60 * 1000);
 
-    // 3. ПОЛУЧАЕМ ВЛАДЕЛЬЦА ПОДКЛЮЧЕНИЯ
     const conn = await ctx.getBusinessConnection();
     const ownerId = conn && conn.user ? String(conn.user.id) : null;
 
     if (!ownerId) return;
 
-    // 4. ЕСЛИ ПИШЕТ ВЛАДЕЛЬЕЦ АККАУНТА — МГНОВЕННО СТАВИМ ПАУЗУ И МОЛЧИМ!
+    // ЕСЛИ ПИШЕТ ВЛАДЕЛЬЕЦ АККАУНТА — МОЛЧИМ!
     if (senderId === ownerId) {
       localPauses.set(chatId, Date.now() + PAUSE_DURATION);
       db.setPause(chatId, PAUSE_DURATION).catch(() => {});
-      console.log(`🛑 Владелец написал в чат ${chatId}. Автоответчик остановлен.`);
       return;
     }
 
-    // 5. ПРОВЕРКА ПАУЗЫ (Сначала локально в памяти, потом в БД)
+    // ПРОВЕРКА ПАУЗ
     const localPauseUntil = localPauses.get(chatId);
-    if (localPauseUntil && localPauseUntil > Date.now()) {
-      console.log(`⏸️ Чат ${chatId} на локальной паузе.`);
-      return;
-    }
+    if (localPauseUntil && localPauseUntil > Date.now()) return;
 
     const isDbPaused = await db.isPaused(chatId).catch(() => false);
-    if (isDbPaused) {
-      console.log(`⏸️ Чат ${chatId} на паузе в БД.`);
-      return;
-    }
+    if (isDbPaused) return;
 
-    // Ставим паузу 15 секунд прямо сейчас, чтобы предотвратить повторный спам
+    // Ставим анти-спам паузу на 15 секунд
     localPauses.set(chatId, Date.now() + 15000);
     db.setPause(chatId, 15000).catch(() => {});
 
-    // 6. ПОЛУЧАЕМ НАСТРОЙКИ ОТВЕТА
     let replyText = await db.getCustomReply(ownerId);
 
     let incomingContent = businessMessage.text || businessMessage.caption || '[Медиа]';
     db.saveMessage(chatId, 'user', incomingContent);
 
-    const fromUser = businessMessage.from;
-    const username = fromUser.username ? `@${fromUser.username}` : (fromUser.first_name || 'Клиент');
-
-    // А) ГОЛОСОВОЕ
+    // 1. ГОЛОСОВОЕ
     if (replyText && replyText.startsWith('voice:')) {
       const voiceFileId = replyText.replace('voice:', '').trim();
       await ctx.api.sendVoice(chatId, voiceFileId, { business_connection_id: connectionId });
       db.saveMessage(chatId, 'assistant', `[Голосовое]`);
-      await sendAdminLog(`🔔 <b>Бизнес-отклик!</b>\nВладелец: <code>${ownerId}</code>\nКлиент: ${username}\n🤖 <b>Ответил ГС.</b>`);
       return;
     }
 
-    // Б) СТИКЕР
+    // 2. СТИКЕР
     if (replyText && replyText.startsWith('sticker:')) {
       const stickerFileId = replyText.replace('sticker:', '').trim();
       await ctx.api.sendSticker(chatId, stickerFileId, { business_connection_id: connectionId });
       db.saveMessage(chatId, 'assistant', `[Стикер]`);
-      await sendAdminLog(`🔔 <b>Бизнес-отклик!</b>\nВладелец: <code>${ownerId}</code>\nКлиент: ${username}\n🤖 <b>Ответил стикером.</b>`);
       return;
     }
 
-    // В) ДЕФОЛТНЫЙ ТЕКСТ
+    // 3. ДЕФОЛТНЫЙ ТЕКСТ
     if (!replyText) {
       replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
     }
 
-    // Г) ТЕКСТ
+    // 4. ТЕКСТОВЫЙ ОТВЕТ
     db.saveMessage(chatId, 'assistant', replyText);
     await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
-    
-    const safeReply = replyText.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    await sendAdminLog(`🔔 <b>Бизнес-отклик!</b>\nВладелец: <code>${ownerId}</code>\nКлиент: ${username}\n🤖 <b>Ответил:</b> ${safeReply}`);
 
   } catch (error) {
     console.error('❌ Ошибка в бизнес-сообщении:', error);
