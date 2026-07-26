@@ -12,12 +12,12 @@ export const bot = new Bot(process.env.BOT_TOKEN);
 
 const PAUSE_DURATION = 5 * 60 * 1000; 
 
-// Локальный кэш
+// Локальный кэш пауз и сообщений в памяти
 const processedMessages = new Set();
 const localPauses = new Map();
 const waitingForVoice = new Map();
 
-// --- КОМАНДЫ В ЛИЧКЕ С БОТОМ ---
+// --- КОМАНДА /start ---
 bot.command('start', async (ctx) => {
   await ctx.reply(
     '👋 <b>Привет! Я бот Кагуя 2.0.</b>\n\n' +
@@ -29,10 +29,14 @@ bot.command('start', async (ctx) => {
   );
 });
 
+// --- КОМАНДА /set ---
 bot.command('set', async (ctx) => {
   try {
-    const userId = String(ctx.from.id); 
-    const customText = ctx.match.trim();
+    const userId = String(ctx.from.id);
+    const fullText = ctx.message.text || '';
+    
+    // Надежно вырезаем команду /set из текста
+    const customText = fullText.replace(/^\/set\s*/i, '').trim();
 
     if (customText.toLowerCase() === 'gs') {
       waitingForVoice.set(userId, true);
@@ -40,7 +44,7 @@ bot.command('set', async (ctx) => {
     }
 
     if (!customText) {
-      return await ctx.reply('❌ Ошибка. Напишите текст после `/set`.', { parse_mode: 'HTML' });
+      return await ctx.reply('❌ Ошибка. Напишите текст после `/set` (например: `/set Привет!`).', { parse_mode: 'HTML' });
     }
 
     await db.setCustomReply(userId, customText);
@@ -50,6 +54,7 @@ bot.command('set', async (ctx) => {
   }
 });
 
+// --- ОБРАБОТКА ГОЛОСОВЫХ И СТИКЕРОВ В ЛИЧКЕ ---
 bot.on('message:voice', async (ctx) => {
   if (ctx.businessMessage) return;
 
@@ -97,7 +102,7 @@ bot.on('business_message', async (ctx) => {
 
     if (!ownerId) return;
 
-    // ЕСЛИ ПИШЕТ ВЛАДЕЛЬЕЦ АККАУНТА — МОЛЧИМ!
+    // ЕСЛИ ПИШЕТ ВЛАДЕЛЬЕЦ — МОЛЧИМ
     if (senderId === ownerId) {
       localPauses.set(chatId, Date.now() + PAUSE_DURATION);
       db.setPause(chatId, PAUSE_DURATION).catch(() => {});
@@ -111,7 +116,7 @@ bot.on('business_message', async (ctx) => {
     const isDbPaused = await db.isPaused(chatId).catch(() => false);
     if (isDbPaused) return;
 
-    // Ставим анти-спам паузу на 15 секунд
+    // Анти-спам пауза на 15 секунд
     localPauses.set(chatId, Date.now() + 15000);
     db.setPause(chatId, 15000).catch(() => {});
 
@@ -149,3 +154,4 @@ bot.on('business_message', async (ctx) => {
     console.error('❌ Ошибка в бизнес-сообщении:', error);
   }
 });
+
