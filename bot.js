@@ -10,12 +10,14 @@ if (!process.env.BOT_TOKEN) {
 
 export const bot = new Bot(process.env.BOT_TOKEN);
 
-const PAUSE_DURATION = 5 * 60 * 1000; 
+const PAUSE_DURATION = 5 * 60 * 1000; // Пауза 5 минут при ответе владельца
+const ANTI_SPAM_PAUSE = 3000;         // Быстрая пауза 3 секунды
 
-// Локальный кэш пауз и сообщений в памяти
+// Локальный кэш
 const processedMessages = new Set();
 const localPauses = new Map();
 const waitingForVoice = new Map();
+const replyCache = new Map();         // Кэш ответов в памяти (для скорости)
 
 // --- КОМАНДА /start ---
 bot.command('start', async (ctx) => {
@@ -34,8 +36,6 @@ bot.command('set', async (ctx) => {
   try {
     const userId = String(ctx.from.id);
     const fullText = ctx.message.text || '';
-    
-    // Надежно вырезаем команду /set из текста
     const customText = fullText.replace(/^\/set\s*/i, '').trim();
 
     if (customText.toLowerCase() === 'gs') {
@@ -44,24 +44,28 @@ bot.command('set', async (ctx) => {
     }
 
     if (!customText) {
-      return await ctx.reply('❌ Ошибка. Напишите текст после `/set` (например: `/set Привет!`).', { parse_mode: 'HTML' });
+      return await ctx.reply('❌ Ошибка. Напишите текст после `/set`.', { parse_mode: 'HTML' });
     }
 
     await db.setCustomReply(userId, customText);
+    replyCache.set(userId, customText); // Сразу обновляем в быстром кэше
+
     await ctx.reply(`✅ <b>Успешно сохранено!</b>\n\n${customText}`, { parse_mode: 'HTML' });
   } catch (err) {
     await ctx.reply(`❌ Ошибка: ${err.message}`);
   }
 });
 
-// --- ОБРАБОТКА ГОЛОСОВЫХ И СТИКЕРОВ В ЛИЧКЕ ---
+// --- ОБРАБОТКА ГС И СТИКЕРОВ ---
 bot.on('message:voice', async (ctx) => {
   if (ctx.businessMessage) return;
 
   const userId = String(ctx.from.id);
   if (waitingForVoice.has(userId)) {
     const fileId = ctx.message.voice.file_id;
-    await db.setCustomReply(userId, `voice:${fileId}`);
+    const value = `voice:${fileId}`;
+    await db.setCustomReply(userId, value);
+    replyCache.set(userId, value);
     waitingForVoice.delete(userId);
     return await ctx.reply('✅ <b>Голосовое сообщение успешно сохранено на автоответ!</b>', { parse_mode: 'HTML' });
   }
@@ -95,32 +99,33 @@ bot.on('business_message', async (ctx) => {
     const uniqueKey = `${chatId}:${messageId}`;
     if (processedMessages.has(uniqueKey)) return;
     processedMessages.add(uniqueKey);
-    setTimeout(() => processedMessages.delete(uniqueKey), 60 * 1000);
+    setTimeout(() => processedMessages.delete(uniqueKey), 30 * 1000);
 
     const conn = await ctx.getBusinessConnection();
     const ownerId = conn && conn.user ? String(conn.user.id) : null;
 
     if (!ownerId) return;
 
-    // ЕСЛИ ПИШЕТ ВЛАДЕЛЬЕЦ — МОЛЧИМ
+    // ЕСЛИ ПИШЕТ ВЛАДЕЛЬЕЦ — МОЛЧИМ И СТАВИМ ПАУЗУ НА 5 МИНУТ
     if (senderId === ownerId) {
       localPauses.set(chatId, Date.now() + PAUSE_DURATION);
       db.setPause(chatId, PAUSE_DURATION).catch(() => {});
       return;
     }
 
-    // ПРОВЕРКА ПАУЗ
+    // ПРОВЕРКА ПАУЗЫ (быстрая проверка из памяти)
     const localPauseUntil = localPauses.get(chatId);
     if (localPauseUntil && localPauseUntil > Date.now()) return;
 
-    const isDbPaused = await db.isPaused(chatId).catch(() => false);
-    if (isDbPaused) return;
+    // Ставим быструю паузу на 3 секунды
+    localPauses.set(chatId, Date.now() + ANTI_SPAM_PAUSE);
 
-    // Анти-спам пауза на 15 секунд
-    localPauses.set(chatId, Date.now() + 15000);
-    db.setPause(chatId, 15000).catch(() => {});
-
-    let replyText = await db.getCustomReply(ownerId);
+    // ПОЛУЧАЕМ НАСТРОЙКУ (Сначала из памяти, потом из БД)
+    let replyText = replyCache.get(ownerId);
+    if (!replyText) {
+      replyText = await db.getCustomReply(ownerId);
+      if (replyText) replyCache.set(ownerId, replyText);
+    }
 
     let incomingContent = businessMessage.text || businessMessage.caption || '[Медиа]';
     db.saveMessage(chatId, 'user', incomingContent);
@@ -154,4 +159,3 @@ bot.on('business_message', async (ctx) => {
     console.error('❌ Ошибка в бизнес-сообщении:', error);
   }
 });
-
