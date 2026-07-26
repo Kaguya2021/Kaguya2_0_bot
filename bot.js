@@ -1,4 +1,4 @@
-import Bot } from 'grammy';
+import { Bot } from 'grammy';
 import { db } from './database.js';
 import dotenv from 'dotenv';
 
@@ -72,14 +72,13 @@ bot.on('message:sticker', async (ctx) => {
   );
 });
 
-// --- АВТОМАТИЗАЦИЯ БИЗНЕС-ЧАТОВ (ДЛЯ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ) ---
+// --- АВТОМАТИЗАЦИЯ БИЗНЕС-ЧАТОВ ---
 bot.on('business_message', async (ctx) => {
   try {
     const businessMessage = ctx.businessMessage;
     const connectionId = businessMessage.business_connection_id; 
     const chatId = businessMessage.chat.id;
     
-    // Игнорируем сообщения от других ботов
     if (businessMessage.from.is_bot) return;
 
     const conn = await ctx.getBusinessConnection();
@@ -87,7 +86,6 @@ bot.on('business_message', async (ctx) => {
 
     if (!ownerId) return;
 
-    // Если сам владелец бизнес-аккаунта пишет в чат — пауза 5 минут
     const senderId = String(businessMessage.from.id);
     if (senderId === ownerId) {
       await db.setPause(chatId, PAUSE_DURATION).catch(() => {});
@@ -95,11 +93,9 @@ bot.on('business_message', async (ctx) => {
       return;
     }
 
-    // Проверяем паузу в БД
     const isPaused = await db.isPaused(chatId).catch(() => false);
     if (isPaused) return;
 
-    // Достаем сохраненные настройки ДЛЯ ИМЕННО ЭТОГО ВЛАДЕЛЬЦА
     let replyText = await db.getCustomReply(ownerId);
 
     let incomingContent = businessMessage.text || businessMessage.caption || '[Медиа]';
@@ -108,10 +104,9 @@ bot.on('business_message', async (ctx) => {
     const fromUser = businessMessage.from;
     const username = fromUser.username ? `@${fromUser.username}` : (fromUser.first_name || 'Клиент');
 
-    // Ставим анти-спам паузу 10 секунд
     await db.setPause(chatId, 10000).catch(() => {});
 
-    // 1. ЕСЛИ У ПОЛЬЗОВАТЕЛЯ НАСТРОЕНО ГС
+    // 1. ГОЛОСОВОЕ
     if (replyText && replyText.startsWith('voice:')) {
       const voiceFileId = replyText.replace('voice:', '').trim();
       await ctx.api.sendVoice(chatId, voiceFileId, { business_connection_id: connectionId });
@@ -120,7 +115,7 @@ bot.on('business_message', async (ctx) => {
       return;
     }
 
-    // 2. ЕСЛИ У ПОЛЬЗОВАТЕЛЯ НАСТРОЕН СТИКЕР
+    // 2. СТИКЕР
     if (replyText && replyText.startsWith('sticker:')) {
       const stickerFileId = replyText.replace('sticker:', '').trim();
       await ctx.api.sendSticker(chatId, stickerFileId, { business_connection_id: connectionId });
@@ -129,12 +124,12 @@ bot.on('business_message', async (ctx) => {
       return;
     }
 
-    // 3. ЕСЛИ НАСТРОЕК НЕТ — ИСПОЛЬЗУЕМ ДЕФОЛТНЫЙ ТЕКСТ (Чтобы работало у всех!)
+    // 3. ДЕФОЛТНЫЙ ТЕКСТ
     if (!replyText) {
       replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
     }
 
-    // 4. ОТПРАВКА ТЕКСТА
+    // 4. ТЕКСТ
     db.saveMessage(chatId, 'assistant', replyText);
     await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
     
