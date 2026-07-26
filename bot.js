@@ -10,11 +10,12 @@ if (!process.env.BOT_TOKEN) {
 
 export const bot = new Bot(process.env.BOT_TOKEN);
 
-const PAUSE_DURATION = 5 * 60 * 1000; // Пауза 5 минут, когда пишешь ты сам
+const PAUSE_DURATION = 5 * 60 * 1000; // Пауза 5 минут при твоем ответе
 const ADMIN_IDS = [6511859639, 8028803176]; 
 
-// Кэш для предотвращения дублирования запросов от Telegram
+// Локальный кэш в памяти (защита от тупящей базы данных)
 const processedMessages = new Set();
+const localPauses = new Map();
 
 async function sendAdminLog(text) {
   for (const adminId of ADMIN_IDS) {
@@ -24,6 +25,7 @@ async function sendAdminLog(text) {
 
 const waitingForVoice = new Map();
 
+// --- КОМАНДЫ В ЛИЧКЕ С БОТОМ ---
 bot.command('start', async (ctx) => {
   await ctx.reply(
     '👋 <b>Привет! Я бот Кагуя 2.0.</b>\n\n' +
@@ -57,6 +59,8 @@ bot.command('set', async (ctx) => {
 });
 
 bot.on('message:voice', async (ctx) => {
+  if (ctx.businessMessage) return; // Игнорируем голосовухи из бизнес-чатов
+
   const userId = String(ctx.from.id);
   if (waitingForVoice.has(userId)) {
     const fileId = ctx.message.voice.file_id;
@@ -67,6 +71,8 @@ bot.on('message:voice', async (ctx) => {
 });
 
 bot.on('message:sticker', async (ctx) => {
+  if (ctx.businessMessage) return; // Игнорируем стикеры из бизнес-чатов
+
   const stickerId = ctx.message.sticker.file_id;
   await ctx.reply(
     `🆔 <b>ID этого стикера:</b>\n<code>${stickerId}</code>\n\n` +
@@ -79,58 +85,63 @@ bot.on('message:sticker', async (ctx) => {
 bot.on('business_message', async (ctx) => {
   try {
     const businessMessage = ctx.businessMessage;
+    if (!businessMessage) return;
+
     const connectionId = businessMessage.business_connection_id; 
-    const chatId = businessMessage.chat.id;
+    const chatId = String(businessMessage.chat.id);
     const messageId = businessMessage.message_id;
     const senderId = String(businessMessage.from.id);
 
     // 1. ИГНОРИРУЕМ БОТОВ
     if (businessMessage.from.is_bot) return;
 
-    // 2. ЗАЩИТА ОТ ДУБЛИРОВАНИЯ (Защита от повторных повторов Vercel/Telegram)
+    // 2. ЗАЩИТА ОТ ДУБЛЕЙ ВЕБХУКА
     const uniqueKey = `${chatId}:${messageId}`;
-    if (processedMessages.has(uniqueKey)) {
-      console.log(`⚠️ Дубликат сообщения ${uniqueKey} пропущен.`);
-      return;
-    }
+    if (processedMessages.has(uniqueKey)) return;
     processedMessages.add(uniqueKey);
-    // Очищаем кэш через 2 минуты, чтобы не забивать память
-    setTimeout(() => processedMessages.delete(uniqueKey), 2 * 60 * 1000);
+    setTimeout(() => processedMessages.delete(uniqueKey), 60 * 1000);
 
-    // 3. ПОЛУЧАЕМ ВЛАДЕЛЬЦА АККАУНТА
+    // 3. ПОЛУЧАЕМ ВЛАДЕЛЬЦА ПОДКЛЮЧЕНИЯ
     const conn = await ctx.getBusinessConnection();
     const ownerId = conn && conn.user ? String(conn.user.id) : null;
 
     if (!ownerId) return;
 
-    // 4. ЖЕЛЕЗОБЕТОННО: ЕСЛИ ПИШЕШЬ ТЫ (ВЛАДЕЛЕЦ) — БОТ МОЛЧИТ И СТАВИТ ПАУЗУ!
+    // 4. ЕСЛИ ПИШЕТ ВЛАДЕЛЬЕЦ АККАУНТА — МГНОВЕННО СТАВИМ ПАУЗУ И МОЛЧИМ!
     if (senderId === ownerId) {
-      await db.setPause(chatId, PAUSE_DURATION).catch(() => {});
-      console.log(`🛑 Владелец сам написал в чат ${chatId}. Автоответчик остановлен на 5 минут.`);
+      localPauses.set(chatId, Date.now() + PAUSE_DURATION);
+      db.setPause(chatId, PAUSE_DURATION).catch(() => {});
+      console.log(`🛑 Владелец написал в чат ${chatId}. Автоответчик остановлен.`);
       return;
     }
 
-    // 5. ПРОВЕРЯЕМ, НЕ НА ПАУЗЕ ЛИ ЧАТ
-    const isPaused = await db.isPaused(chatId).catch(() => false);
-    if (isPaused) {
-      console.log(`⏸️ Чат ${chatId} на паузе. Пропускаем.`);
+    // 5. ПРОВЕРКА ПАУЗЫ (Сначала локально в памяти, потом в БД)
+    const localPauseUntil = localPauses.get(chatId);
+    if (localPauseUntil && localPauseUntil > Date.now()) {
+      console.log(`⏸️ Чат ${chatId} на локальной паузе.`);
       return;
     }
 
-    // 6. ДОСТАЕМ КАСТОМНЫЙ ОТВЕТ ИЗ БАЗЫ
+    const isDbPaused = await db.isPaused(chatId).catch(() => false);
+    if (isDbPaused) {
+      console.log(`⏸️ Чат ${chatId} на паузе в БД.`);
+      return;
+    }
+
+    // Ставим паузу 15 секунд прямо сейчас, чтобы предотвратить повторный спам
+    localPauses.set(chatId, Date.now() + 15000);
+    db.setPause(chatId, 15000).catch(() => {});
+
+    // 6. ПОЛУЧАЕМ НАСТРОЙКИ ОТВЕТА
     let replyText = await db.getCustomReply(ownerId);
 
-    // Сохраняем историю
     let incomingContent = businessMessage.text || businessMessage.caption || '[Медиа]';
     db.saveMessage(chatId, 'user', incomingContent);
 
     const fromUser = businessMessage.from;
     const username = fromUser.username ? `@${fromUser.username}` : (fromUser.first_name || 'Клиент');
 
-    // Ставим анти-спам паузу на 15 секунд для этого чата
-    await db.setPause(chatId, 15000).catch(() => {});
-
-    // А) ОТПРАВКА ГОЛОСОВОГО
+    // А) ГОЛОСОВОЕ
     if (replyText && replyText.startsWith('voice:')) {
       const voiceFileId = replyText.replace('voice:', '').trim();
       await ctx.api.sendVoice(chatId, voiceFileId, { business_connection_id: connectionId });
@@ -139,7 +150,7 @@ bot.on('business_message', async (ctx) => {
       return;
     }
 
-    // Б) ОТПРАВКА СТИКЕРА
+    // Б) СТИКЕР
     if (replyText && replyText.startsWith('sticker:')) {
       const stickerFileId = replyText.replace('sticker:', '').trim();
       await ctx.api.sendSticker(chatId, stickerFileId, { business_connection_id: connectionId });
@@ -148,12 +159,12 @@ bot.on('business_message', async (ctx) => {
       return;
     }
 
-    // В) ДЕФОЛТНЫЙ ТЕКСТ (Если нет настроек)
+    // В) ДЕФОЛТНЫЙ ТЕКСТ
     if (!replyText) {
       replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
     }
 
-    // Г) ОТПРАВКА ТЕКСТА
+    // Г) ТЕКСТ
     db.saveMessage(chatId, 'assistant', replyText);
     await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
     
