@@ -377,21 +377,18 @@ bot.on('business_message', async (ctx) => {
     // Анти-спам задержка (3 секунды)
     localPauses.set(chatId, Date.now() + ANTI_SPAM_PAUSE);
 
-    // 5. ПОИСК НАСТРОЕК АВТООТВЕТА
+        // 5. ПОИСК НАСТРОЕК АВТООТВЕТА
     let replyText = null;
 
-    // Пробуем взять из кэша / БД по ownerId
     if (ownerId) {
-      replyText = replyCache.get(ownerId);
-      if (!replyText) {
-        replyText = await db.getCustomReply(ownerId).catch(() => null);
-        if (replyText) replyCache.set(ownerId, replyText);
-      }
+      replyText = replyCache.get(ownerId) || await db.getCustomReply(ownerId).catch(() => null);
     }
 
-    // Если по ownerId не нашлось, пробуем искать по chatId
+    // ЕСЛИ У ПОЛЬЗОВАТЕЛЯ НЕТ СВОЕГО ТЕКСТА — СТАВИМ ДЕФОЛТНЫЙ
     if (!replyText) {
-      replyText = replyCache.get(chatId) || await db.getCustomReply(chatId).catch(() => null);
+      replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
+    } else {
+      replyCache.set(ownerId, replyText);
     }
 
     // 6. ОТПРАВКА ОТВЕТА
