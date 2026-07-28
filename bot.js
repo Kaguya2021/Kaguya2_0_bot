@@ -328,7 +328,7 @@ async function isWithinWorkingHours(ownerId) {
 // --- АВТОМАТИЗАЦИЯ БИЗНЕС-ЧАТОВ ---
 bot.on('business_message', async (ctx) => {
   try {
-    // Если глобальная остановка выключена админом — ничего не делаем
+    // Если глобальная остановка включена админом — ничего не делаем
     if (globalThis.globalStop) return;
 
     const businessMessage = ctx.businessMessage;
@@ -339,6 +339,7 @@ bot.on('business_message', async (ctx) => {
     const messageId = businessMessage.message_id;
     const senderId = String(businessMessage.from.id);
 
+    // Игнорируем сообщений от ботов
     if (businessMessage.from.is_bot) return;
 
     // 1. ЗАЩИТА ОТ ДУБЛЕЙ
@@ -347,43 +348,46 @@ bot.on('business_message', async (ctx) => {
     processedMessages.add(uniqueKey);
     setTimeout(() => processedMessages.delete(uniqueKey), 30 * 1000);
 
-    const conn = await ctx.getBusinessConnection();
+    const conn = await ctx.getBusinessConnection().catch(() => null);
     const ownerId = conn && conn.user ? String(conn.user.id) : null;
 
-    if (!ownerId) return;
-
-    // 2. ЖЕЛЕЗОБЕТОННЫЙ СТОП-ТАЙМЕР: ЕСЛИ НАПИСАЛ ВЛАДЕЛЕЦ — СТАВИМ ПАУЗУ НА 10 МИНУТ!
-    if (senderId === ownerId) {
+    // 2. ЕСЛИ НАПИСАЛ САМ ВЛАДЕЛЬЦ АККАУНТА (Исходящее)
+    // Ставим временную паузу ТОЛЬКО в оперативной памяти (не в БД), чтобы не ломать бот
+    if (ownerId && senderId === ownerId) {
       localPauses.set(chatId, Date.now() + PAUSE_DURATION);
-      if (db.setPause) db.setPause(chatId, PAUSE_DURATION).catch(() => {});
-      console.log(`🛑 Владелец ответил сам в чате ${chatId}. Автоответчик на паузе.`);
+      console.log(`🛑 Владелец ответил сам в чате ${chatId}. Автоответчик на локальной паузе 10 мин.`);
       return;
     }
 
-    // 3. ПРОВЕРКА ПАУЗЫ (И локально, и для конкретного юзера)
-    const localPauseUntil = localPauses.get(chatId) || localPauses.get(ownerId);
-    if (localPauseUntil && localPauseUntil > Date.now()) return;
+    // 3. ПРОВЕРКА ПАУЗ
+    // А) Локальная пауза (если владелец недавно писал в этот чат)
+    const localPauseUntil = localPauses.get(chatId);
+    if (localPauseUntil && localPauseUntil > Date.now()) {
+      return;
+    }
 
+    // Б) Админская ручная пауза из БД (/stop <id>)
     const isDbPaused = await db.isPaused?.(chatId).catch(() => false);
     if (isDbPaused) return;
 
-    // 4. ПРОВЕРКА РАБОЧИХ ЧАСОВ ПОЛЬЗОВАТЕЛЯ
-    const active = await isWithinWorkingHours(ownerId);
+    // 4. ПРОВЕРКА РАБОЧИХ ЧАСОВ (По ownerId или по chatId)
+    const targetUserId = ownerId || chatId;
+    const active = await isWithinWorkingHours(targetUserId);
     if (!active) return;
 
-    // Анти-спам задержка (3 секунды)
+    // Анти-спам задержка (3 секунды в памяти)
     localPauses.set(chatId, Date.now() + ANTI_SPAM_PAUSE);
-    if (db.setPause) db.setPause(chatId, ANTI_SPAM_PAUSE).catch(() => {});
 
-    // ПОЛУЧЕНИЕ НАСТРОЙКИ
-    let replyText = replyCache.get(ownerId);
+    // 5. ПОЛУЧЕНИЕ НАСТРОЙКИ АВТООТВЕТА
+    let replyText = replyCache.get(targetUserId);
     if (!replyText) {
       try {
-        replyText = await db.getCustomReply(ownerId);
-        if (replyText) replyCache.set(ownerId, replyText);
+        replyText = await db.getCustomReply(targetUserId);
+        if (replyText) replyCache.set(targetUserId, replyText);
       } catch (e) {}
     }
 
+    // Логирование входящего
     let incomingContent = businessMessage.text || businessMessage.caption || '[Медиа]';
     if (db.saveMessage) db.saveMessage(chatId, 'user', incomingContent).catch(() => {});
 
@@ -419,12 +423,12 @@ bot.on('business_message', async (ctx) => {
       return;
     }
 
-    // Г) ДЕФОЛТНЫЙ ТЕКСТ
+    // Г) ДЕФОЛТНЫЙ ТЕКСТ (Если пользователь ещё не настроил свой /set)
     if (!replyText) {
       replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
     }
 
-    // Д) ТЕКСТ
+    // Д) ТЕКСТОВЫЙ ОТВЕТ
     await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
     if (db.saveMessage) db.saveMessage(chatId, 'assistant', replyText).catch(() => {});
 
