@@ -1,16 +1,11 @@
 {
-  "name": "telegram-business-bot",
+  "name": "kaguya-bot",
   "version": "1.0.0",
-  "description": "Telegram Business Bot using grammY",
-  "main": "index.js",
   "type": "module",
-  "scripts": {
-    "start": "node index.js"
-  },
+  "main": "api/index.js",
   "dependencies": {
     "dotenv": "^16.4.5",
-    "express": "^5.2.1",
-    "grammy": "^1.21.1",
-    "postgres": "^3.4.9"
+    "grammy": "^1.30.0",
+    "pg": "^8.11.5"
   }
 }
