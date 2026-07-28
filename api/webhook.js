@@ -4,12 +4,13 @@ import { bot } from '../bot.js';
 let isInitialized = false;
 
 export default async function handler(req, res) {
+  // Проверка для обычного браузера
   if (req.method === 'GET') {
     return res.status(200).send('🤖 Kaguya Bot is active!');
   }
 
   try {
-    // Инициализируем бота один раз при холодном старте
+    // ОБЯЗАТЕЛЬНО для grammY на Vercel:
     if (!isInitialized) {
       await bot.init();
       isInitialized = true;
@@ -18,7 +19,7 @@ export default async function handler(req, res) {
     const handleUpdate = webhookCallback(bot, 'std/http');
     await handleUpdate(req, res);
   } catch (error) {
-    console.error('❌ Ошибка внутри вебхука:', error);
+    console.error('❌ Ошибка выполнения бота:', error);
     res.status(200).json({ ok: true });
   }
 }
