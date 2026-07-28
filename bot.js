@@ -158,7 +158,7 @@ bot.on('message:voice', async (ctx) => {
 // --- ВНИМАНИЕ: ФУНКЦИЯ ПРОВЕРКИ РАБОЧИХ ЧАСОВ ---
 async function isWithinWorkingHours(ownerId) {
   try {
-    const schedule = await db.getSchedule(ownerId); // Должен возвращать { start_time: "05:00", end_time: "20:00" }
+    const schedule = await db.getSchedule(ownerId);
     if (!schedule || !schedule.start_time || !schedule.end_time) return true;
 
     // Время в UTC+6
@@ -175,11 +175,10 @@ async function isWithinWorkingHours(ownerId) {
     if (startMinutes <= endMinutes) {
       return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
     } else {
-      // Ночная смена (например 22:00 - 06:00)
       return currentMinutes >= startMinutes || currentMinutes <= endMinutes;
     }
   } catch (e) {
-    return true; // Если произошла ошибка — отвечаем по умолчанию
+    return true;
   }
 }
 
