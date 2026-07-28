@@ -91,7 +91,7 @@ bot.command('unstop', async (ctx) => {
 
   if (target === 'all') {
     globalThis.globalStop = false;
-    return await ctx.reply('✅ <b>Глобальный автоответчик СНОВА ВКТЮЧЕН для всех!</b>', { parse_mode: 'HTML' });
+    return await ctx.reply('✅ <b>Глобальный автоответчик СНОВА ВКЛЮЧЕН для всех!</b>', { parse_mode: 'HTML' });
   }
 
   if (target) {
@@ -302,6 +302,7 @@ bot.on('message', async (ctx, next) => {
 // --- ВНИМАНИЕ: ФУНКЦИЯ ПРОВЕРКИ РАБОЧИХ ЧАСОВ ---
 async function isWithinWorkingHours(ownerId) {
   try {
+    if (!ownerId) return true;
     const schedule = await db.getSchedule(ownerId);
     if (!schedule || !schedule.start_time || !schedule.end_time) return true;
 
@@ -328,7 +329,6 @@ async function isWithinWorkingHours(ownerId) {
 // --- АВТОМАТИЗАЦИЯ БИЗНЕС-ЧАТОВ ---
 bot.on('business_message', async (ctx) => {
   try {
-    // Если глобальная остановка включена админом — ничего не делаем
     if (globalThis.globalStop) return;
 
     const businessMessage = ctx.businessMessage;
@@ -339,7 +339,6 @@ bot.on('business_message', async (ctx) => {
     const messageId = businessMessage.message_id;
     const senderId = String(businessMessage.from.id);
 
-    // Игнорируем сообщений от ботов
     if (businessMessage.from.is_bot) return;
 
     // 1. ЗАЩИТА ОТ ДУБЛЕЙ
@@ -348,46 +347,54 @@ bot.on('business_message', async (ctx) => {
     processedMessages.add(uniqueKey);
     setTimeout(() => processedMessages.delete(uniqueKey), 30 * 1000);
 
-    const conn = await ctx.getBusinessConnection().catch(() => null);
-    const ownerId = conn && conn.user ? String(conn.user.id) : null;
+    // Получение подключения владельца
+    let ownerId = null;
+    try {
+      const conn = await ctx.getBusinessConnection();
+      if (conn && conn.user) {
+        ownerId = String(conn.user.id);
+      }
+    } catch (e) {}
 
-    // 2. ЕСЛИ НАПИСАЛ САМ ВЛАДЕЛЬЦ АККАУНТА (Исходящее)
-    // Ставим временную паузу ТОЛЬКО в оперативной памяти (не в БД), чтобы не ломать бот
+    // 2. ЕСЛИ НАПИСАЛ САМ ВЛАДЕЛЬЦ АККАУНТА — СТАВИМ ЛОКАЛЬНУЮ ПАУЗУ
     if (ownerId && senderId === ownerId) {
       localPauses.set(chatId, Date.now() + PAUSE_DURATION);
-      console.log(`🛑 Владелец ответил сам в чате ${chatId}. Автоответчик на локальной паузе 10 мин.`);
+      console.log(`🛑 Владелец ответил сам в чате ${chatId}. Пауза 10 мин.`);
       return;
     }
 
     // 3. ПРОВЕРКА ПАУЗ
-    // А) Локальная пауза (если владелец недавно писал в этот чат)
     const localPauseUntil = localPauses.get(chatId);
-    if (localPauseUntil && localPauseUntil > Date.now()) {
-      return;
-    }
+    if (localPauseUntil && localPauseUntil > Date.now()) return;
 
-    // Б) Админская ручная пауза из БД (/stop <id>)
     const isDbPaused = await db.isPaused?.(chatId).catch(() => false);
     if (isDbPaused) return;
 
-    // 4. ПРОВЕРКА РАБОЧИХ ЧАСОВ (По ownerId или по chatId)
-    const targetUserId = ownerId || chatId;
-    const active = await isWithinWorkingHours(targetUserId);
+    // 4. ПРОВЕРКА РАБОЧИХ ЧАСОВ ПОЛЬЗОВАТЕЛЯ
+    const active = await isWithinWorkingHours(ownerId);
     if (!active) return;
 
-    // Анти-спам задержка (3 секунды в памяти)
+    // Анти-спам задержка (3 секунды)
     localPauses.set(chatId, Date.now() + ANTI_SPAM_PAUSE);
 
-    // 5. ПОЛУЧЕНИЕ НАСТРОЙКИ АВТООТВЕТА
-    let replyText = replyCache.get(targetUserId);
-    if (!replyText) {
-      try {
-        replyText = await db.getCustomReply(targetUserId);
-        if (replyText) replyCache.set(targetUserId, replyText);
-      } catch (e) {}
+    // 5. ПОИСК НАСТРОЕК АВТООТВЕТА
+    let replyText = null;
+
+    // Пробуем взять из кэша / БД по ownerId
+    if (ownerId) {
+      replyText = replyCache.get(ownerId);
+      if (!replyText) {
+        replyText = await db.getCustomReply(ownerId).catch(() => null);
+        if (replyText) replyCache.set(ownerId, replyText);
+      }
     }
 
-    // Логирование входящего
+    // Если по ownerId не нашлось, пробуем искать по chatId
+    if (!replyText) {
+      replyText = replyCache.get(chatId) || await db.getCustomReply(chatId).catch(() => null);
+    }
+
+    // 6. ОТПРАВКА ОТВЕТА
     let incomingContent = businessMessage.text || businessMessage.caption || '[Медиа]';
     if (db.saveMessage) db.saveMessage(chatId, 'user', incomingContent).catch(() => {});
 
@@ -403,7 +410,7 @@ bot.on('business_message', async (ctx) => {
       if (stickerToReply) {
         await ctx.api.sendSticker(chatId, stickerToReply, { business_connection_id: connectionId });
       }
-      if (db.saveMessage) db.saveMessage(chatId, 'assistant', `[Комбо: Текст + Стикер]`).catch(() => {});
+      if (db.saveMessage) db.saveMessage(chatId, 'assistant', `[КомБО: Текст + Стикер]`).catch(() => {});
       return;
     }
 
@@ -423,12 +430,12 @@ bot.on('business_message', async (ctx) => {
       return;
     }
 
-    // Г) ДЕФОЛТНЫЙ ТЕКСТ (Если пользователь ещё не настроил свой /set)
+    // Г) ДЕФОЛТНЫЙ ТЕКСТ
     if (!replyText) {
       replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
     }
 
-    // Д) ТЕКСТОВЫЙ ОТВЕТ
+    // Д) ТЕКСТ
     await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
     if (db.saveMessage) db.saveMessage(chatId, 'assistant', replyText).catch(() => {});
 
