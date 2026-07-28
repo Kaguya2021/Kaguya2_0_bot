@@ -24,6 +24,7 @@ async function ensureDbInit() {
   try {
     const client = await pool.connect();
     
+    // Таблица настроек пользователей
     await client.query(`
       CREATE TABLE IF NOT EXISTS user_settings (
         user_id VARCHAR(50) PRIMARY KEY,
@@ -33,6 +34,16 @@ async function ensureDbInit() {
       );
     `);
 
+    // Таблица зарегистрированных пользователей (для рассылок)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        user_id VARCHAR(50) PRIMARY KEY,
+        username VARCHAR(100),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Таблица паузы чатов
     await client.query(`
       CREATE TABLE IF NOT EXISTS chat_pauses (
         chat_id VARCHAR(50) PRIMARY KEY,
@@ -40,6 +51,7 @@ async function ensureDbInit() {
       );
     `);
 
+    // Таблица логов сообщений
     await client.query(`
       CREATE TABLE IF NOT EXISTS message_logs (
         id SERIAL PRIMARY KEY,
@@ -59,6 +71,44 @@ async function ensureDbInit() {
 }
 
 export const db = {
+  // --- АДМИН И РЕГИСТРАЦИЯ ЮЗЕРОВ ---
+  
+  // 1. Регистрация / Обновление юзера
+  registerUser: async (userId, username) => {
+    await ensureDbInit();
+    const query = `
+      INSERT INTO users (user_id, username)
+      VALUES ($1, $2)
+      ON CONFLICT (user_id) 
+      DO UPDATE SET username = EXCLUDED.username;
+    `;
+    return pool.query(query, [userId, username]);
+  },
+
+  // 2. Получение ВСЕХ юзеров для рассылки (/post и /m)
+  getAllUsers: async () => {
+    await ensureDbInit();
+    // Собираем уникальные ID из таблицы юзеров и настроек
+    const query = `
+      SELECT DISTINCT user_id FROM (
+        SELECT user_id FROM users
+        UNION
+        SELECT user_id FROM user_settings
+      ) AS combined_users;
+    `;
+    const res = await pool.query(query);
+    return res.rows;
+  },
+
+  // 3. Получение подробной информации для команды /info <id>
+  getUserInfo: async (userId) => {
+    await ensureDbInit();
+    const res = await pool.query('SELECT username, created_at FROM users WHERE user_id = $1;', [userId]);
+    return res.rows[0] || null;
+  },
+
+  // --- НАСТРОЙКИ АВТООТВЕТА ---
+
   setCustomReply: async (userId, reply) => {
     await ensureDbInit();
     const query = `
