@@ -1,4 +1,4 @@
-import { Bot } from 'grammy';
+import { Bot, InlineKeyboard } from 'grammy';
 import { db } from './database.js';
 import dotenv from 'dotenv';
 
@@ -10,28 +10,173 @@ if (!process.env.BOT_TOKEN) {
 
 export const bot = new Bot(process.env.BOT_TOKEN);
 
-const PAUSE_DURATION = 10 * 60 * 1000; // Пауза 10 минут при вашем ответе
+// Список администраторов бота
+const ADMIN_IDS = ['6511859639'];
+
+const PAUSE_DURATION = 10 * 60 * 1000; // Пауза 10 минут при ответе владельца
 const ANTI_SPAM_PAUSE = 3000;          // Анти-спам пауза 3 секунды
 
 const processedMessages = new Set();
 const localPauses = new Map();
 const replyCache = new Map();
 
-// Состояния для пошаговой настройки /sred
-const stepState = new Map(); 
+// Состояния для пошаговых команд (/sred и /post)
+const stepState = new Map();
+
+// Вспомогательная функция проверки админа
+function isAdmin(userId) {
+  return ADMIN_IDS.includes(String(userId));
+}
 
 // --- КОМАНДА /start ---
 bot.command('start', async (ctx) => {
-  await ctx.reply(
+  const userId = String(ctx.from.id);
+  
+  // Регистрация/обновление пользователя в БД
+  if (db.registerUser) {
+    db.registerUser(userId, ctx.from.username || ctx.from.first_name).catch(() => {});
+  }
+
+  const welcomeText = 
     '👋 <b>Привет! Я бот Кагуя 2.0.</b>\n\n' +
-    '⚙️ Я работаю как автоответчик для вашего Telegram Business!\n\n' +
+    '⚙️ Я работающий автоответчик для вашего Telegram Business!\n\n' +
+    '📢 <b>Наш официальный канал:</b> <a href="https://t.me/kaguya_2_0_bots">Kaguya 2.0 Channel</a>\n' +
+    '<i>Подпишитесь, чтобы быть в курсе всех обновлений и новостей!</i>\n\n' +
     '✍️ <b>Обычный текст:</b> <code>/set Твой текст</code>\n' +
     '🎤 <b>Голосовое:</b> <code>/set gs</code>\n' +
     '🖼️ <b>Комбо (Текст + Стикер):</b> <code>/sred</code>\n' +
     '⏰ <b>Рабочие часы:</b> <code>/time 05:00 20:00</code> (Задать время работы)\n' +
-    '❌ <b>Сбросить часы:</b> <code>/time off</code>',
+    '❌ <b>Сбросить часы:</b> <code>/time off</code>';
+
+  const keyboard = new InlineKeyboard()
+    .url('📢 Подписаться на канал', 'https://t.me/kaguya_2_0_bots');
+
+  await ctx.reply(welcomeText, { parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true });
+});
+
+// --- КОМАНДА /admins ---
+bot.command('admins', async (ctx) => {
+  await ctx.reply(
+    '🔒 <b>Раздел для администраторов</b>\n\n' +
+    'Эта система предназначена только для администраторов, которых добавил лично создатель проекта.\n\n' +
+    '💬 Если вы хотите получить доступ или задать вопрос, попробуйте написать создателю бота (но не факт, что он сделает вас админом!).',
     { parse_mode: 'HTML' }
   );
+});
+
+// --- АДМИН-КОМАНДЫ: /stop И /unstop ---
+bot.command('stop', async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return;
+  const args = ctx.message.text.trim().split(/\s+/);
+  const target = args[1]?.toLowerCase();
+
+  if (target === 'all') {
+    globalThis.globalStop = true;
+    return await ctx.reply('🛑 <b>Глобальный автоответчик ОСТАНОВЛЕН для всех пользователей!</b>', { parse_mode: 'HTML' });
+  }
+
+  if (target) {
+    localPauses.set(target, Date.now() + 24 * 60 * 60 * 1000); // Остановка на 24ч
+    if (db.setPause) db.setPause(target, 24 * 60 * 60 * 1000).catch(() => {});
+    return await ctx.reply(`🛑 Автоответчик остановлен для пользователя ID: <code>${target}</code>`, { parse_mode: 'HTML' });
+  }
+
+  await ctx.reply('❌ Использование: <code>/stop all</code> или <code>/stop <USER_ID></code>', { parse_mode: 'HTML' });
+});
+
+bot.command('unstop', async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return;
+  const args = ctx.message.text.trim().split(/\s+/);
+  const target = args[1]?.toLowerCase();
+
+  if (target === 'all') {
+    globalThis.globalStop = false;
+    return await ctx.reply('✅ <b>Глобальный автоответчик СНОВА ВКТЮЧЕН для всех!</b>', { parse_mode: 'HTML' });
+  }
+
+  if (target) {
+    localPauses.delete(target);
+    if (db.removePause) db.removePause(target).catch(() => {});
+    return await ctx.reply(`✅ Автоответчик снова возобновлен для пользователя ID: <code>${target}</code>`, { parse_mode: 'HTML' });
+  }
+
+  await ctx.reply('❌ Использование: <code>/unstop all</code> или <code>/unstop <USER_ID></code>', { parse_mode: 'HTML' });
+});
+
+// --- АДМИН-КОМАНДА /m (Рассылка текста) ---
+bot.command('m', async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return;
+  const text = ctx.message.text.replace(/^\/m\s*/i, '').trim();
+
+  if (!text) {
+    return await ctx.reply('❌ Напишите текст после команды. Пример: <code>/m Привет всем!</code>', { parse_mode: 'HTML' });
+  }
+
+  const users = (await db.getAllUsers?.()) || [];
+  let successCount = 0;
+
+  for (const u of users) {
+    try {
+      await ctx.api.sendMessage(u.user_id, text, { parse_mode: 'HTML' });
+      successCount++;
+    } catch (e) {}
+  }
+
+  await ctx.reply(`📢 <b>Рассылка завершена!</b> Доставлено пользователям: ${successCount}`, { parse_mode: 'HTML' });
+});
+
+// --- АДМИН-КОМАНДА /mm (Личное сообщение) ---
+bot.command('mm', async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return;
+  const args = ctx.message.text.replace(/^\/mm\s*/i, '').trim().split(/\s+/);
+  const targetId = args[0];
+  const messageText = args.slice(1).join(' ');
+
+  if (!targetId || !messageText) {
+    return await ctx.reply('❌ Использование: <code>/mm <ID> <Сообщение></code>', { parse_mode: 'HTML' });
+  }
+
+  try {
+    await ctx.api.sendMessage(targetId, messageText, { parse_mode: 'HTML' });
+    await ctx.reply(`✅ Сообщение успешно отправлено пользователю <code>${targetId}</code>`, { parse_mode: 'HTML' });
+  } catch (e) {
+    await ctx.reply(`❌ Не удалось отправить сообщение: ${e.message}`);
+  }
+});
+
+// --- АДМИН-КОМАНДА /info (Информация о пользователе) ---
+bot.command('info', async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return;
+  const args = ctx.message.text.trim().split(/\s+/);
+  const targetId = args[1];
+
+  if (!targetId) {
+    return await ctx.reply('❌ Укажите ID: <code>/info <USER_ID></code>', { parse_mode: 'HTML' });
+  }
+
+  try {
+    const userInfo = (await db.getUserInfo?.(targetId)) || {};
+    const customReply = (await db.getCustomReply?.(targetId)) || 'Стандартный дефолтный текст';
+    const schedule = (await db.getSchedule?.(targetId)) || null;
+
+    let infoText = `📊 <b>Информация о пользователе ID:</b> <code>${targetId}</code>\n\n`;
+    infoText += `📅 <b>Подключен:</b> ${userInfo.created_at || 'Неизвестно'}\n`;
+    infoText += `👤 <b>Username/Имя:</b> ${userInfo.username || 'Нет данных'}\n`;
+    infoText += `💬 <b>Текущий автоответ:</b>\n<code>${customReply}</code>\n\n`;
+    infoText += `⏰ <b>График работы:</b> ${schedule?.start_time ? `${schedule.start_time} - ${schedule.end_time}` : 'Круглосуточно'}`;
+
+    await ctx.reply(infoText, { parse_mode: 'HTML' });
+  } catch (e) {
+    await ctx.reply(`❌ Ошибка получения информации: ${e.message}`);
+  }
+});
+
+// --- АДМИН-КОМАНДА /post (Мультимедиа рассылка) ---
+bot.command('post', async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return;
+  const userId = String(ctx.from.id);
+  stepState.set(userId, { step: 'WAITING_POST' });
+  await ctx.reply('📢 <b>Режим создания поста:</b>\n\nОтправьте следующий пост (это может быть текст, фото с подписью или стикер). Я разошлю его всем пользователям!', { parse_mode: 'HTML' });
 });
 
 // --- КОМАНДА /time (Настройка расписания) ---
@@ -66,7 +211,7 @@ bot.command('time', async (ctx) => {
   }
 });
 
-// --- КОМАНДА /sred (Комбо: Текст + Стикер) ---
+// --- КОМАНДА /sred ---
 bot.command('sred', async (ctx) => {
   const userId = String(ctx.from.id);
   stepState.set(userId, { step: 'WAITING_TEXT' });
@@ -99,30 +244,40 @@ bot.command('set', async (ctx) => {
   }
 });
 
-// --- ОБРАБОТКА ОБЫЧНЫХ СООБЩЕНИЙ В ЛИЧКЕ БОТА (Для пошаговых команд) ---
-bot.on('message:text', async (ctx, next) => {
+// --- ОБРАБОТКА ПОШАГОВЫХ ДЕЙСТВИЙ И ПОСТОВ ---
+bot.on('message', async (ctx, next) => {
   if (ctx.businessMessage) return next();
 
   const userId = String(ctx.from.id);
   const state = stepState.get(userId);
 
-  if (state && state.step === 'WAITING_TEXT') {
+  // Обработка /post рассылки для админа
+  if (state && state.step === 'WAITING_POST' && isAdmin(userId)) {
+    stepState.delete(userId);
+    await ctx.reply('🚀 Начинаю рассылку поста...');
+
+    const users = (await db.getAllUsers?.()) || [];
+    let successCount = 0;
+
+    for (const u of users) {
+      try {
+        await ctx.api.copyMessage(u.user_id, ctx.chat.id, ctx.message.message_id);
+        successCount++;
+      } catch (e) {}
+    }
+
+    return await ctx.reply(`🎉 <b>Пост успешно отправлен!</b> Получили пользователей: ${successCount}`, { parse_mode: 'HTML' });
+  }
+
+  // Обработка /sred
+  if (state && state.step === 'WAITING_TEXT' && ctx.message.text) {
     stepState.set(userId, { step: 'WAITING_STICKER', text: ctx.message.text });
     return await ctx.reply('🖼️ <b>Шаг 2/2:</b> Отправьте стикер или вставьте ID стикера:');
   }
 
-  return next();
-});
-
-// --- ОБРАБОТКА СТИКЕРОВ ---
-bot.on('message:sticker', async (ctx) => {
-  if (ctx.businessMessage) return;
-
-  const userId = String(ctx.from.id);
-  const stickerId = ctx.message.sticker.file_id;
-  const state = stepState.get(userId);
-
-  if (state && state.step === 'WAITING_STICKER') {
+  // Обработка стикера для /sred
+  if (state && state.step === 'WAITING_STICKER' && ctx.message.sticker) {
+    const stickerId = ctx.message.sticker.file_id;
     const comboValue = `combo:${state.text}|||${stickerId}`;
     replyCache.set(userId, comboValue);
     db.setCustomReply(userId, comboValue).catch(console.error);
@@ -131,21 +286,8 @@ bot.on('message:sticker', async (ctx) => {
     return await ctx.reply('🔥 <b>Отлично!</b> Комбо автоответ (Текст + Стикер) успешно установлен!', { parse_mode: 'HTML' });
   }
 
-  await ctx.reply(
-    `🆔 <b>ID этого стикера:</b>\n<code>${stickerId}</code>\n\n` +
-    `👉 Установить на автоответ: <code>/set sticker:${stickerId}</code>`,
-    { parse_mode: 'HTML' }
-  );
-});
-
-// --- ОБРАБОТКА ГОЛОСОВЫХ ---
-bot.on('message:voice', async (ctx) => {
-  if (ctx.businessMessage) return;
-
-  const userId = String(ctx.from.id);
-  const state = stepState.get(userId);
-
-  if (state && state.step === 'WAITING_VOICE') {
+  // Обработка голосового
+  if (state && state.step === 'WAITING_VOICE' && ctx.message.voice) {
     const fileId = ctx.message.voice.file_id;
     const value = `voice:${fileId}`;
     replyCache.set(userId, value);
@@ -153,6 +295,8 @@ bot.on('message:voice', async (ctx) => {
     stepState.delete(userId);
     return await ctx.reply('✅ <b>Голосовое сообщение успешно сохранено на автоответ!</b>', { parse_mode: 'HTML' });
   }
+
+  return next();
 });
 
 // --- ВНИМАНИЕ: ФУНКЦИЯ ПРОВЕРКИ РАБОЧИХ ЧАСОВ ---
@@ -161,7 +305,6 @@ async function isWithinWorkingHours(ownerId) {
     const schedule = await db.getSchedule(ownerId);
     if (!schedule || !schedule.start_time || !schedule.end_time) return true;
 
-    // Время в UTC+6
     const now = new Date();
     const utcHours = now.getUTCHours() + 6;
     const currentMinutes = (utcHours % 24) * 60 + now.getUTCMinutes();
@@ -185,6 +328,9 @@ async function isWithinWorkingHours(ownerId) {
 // --- АВТОМАТИЗАЦИЯ БИЗНЕС-ЧАТОВ ---
 bot.on('business_message', async (ctx) => {
   try {
+    // Если глобальная остановка выключена админом — ничего не делаем
+    if (globalThis.globalStop) return;
+
     const businessMessage = ctx.businessMessage;
     if (!businessMessage) return;
 
@@ -209,28 +355,25 @@ bot.on('business_message', async (ctx) => {
     // 2. ЖЕЛЕЗОБЕТОННЫЙ СТОП-ТАЙМЕР: ЕСЛИ НАПИСАЛ ВЛАДЕЛЕЦ — СТАВИМ ПАУЗУ НА 10 МИНУТ!
     if (senderId === ownerId) {
       localPauses.set(chatId, Date.now() + PAUSE_DURATION);
-      db.setPause(chatId, PAUSE_DURATION).catch(() => {});
+      if (db.setPause) db.setPause(chatId, PAUSE_DURATION).catch(() => {});
       console.log(`🛑 Владелец ответил сам в чате ${chatId}. Автоответчик на паузе.`);
       return;
     }
 
-    // 3. ПРОВЕРКА ПАУЗЫ (И в памяти, и в БД)
-    const localPauseUntil = localPauses.get(chatId);
+    // 3. ПРОВЕРКА ПАУЗЫ (И локально, и для конкретного юзера)
+    const localPauseUntil = localPauses.get(chatId) || localPauses.get(ownerId);
     if (localPauseUntil && localPauseUntil > Date.now()) return;
 
-    const isDbPaused = await db.isPaused(chatId).catch(() => false);
+    const isDbPaused = await db.isPaused?.(chatId).catch(() => false);
     if (isDbPaused) return;
 
     // 4. ПРОВЕРКА РАБОЧИХ ЧАСОВ ПОЛЬЗОВАТЕЛЯ
     const active = await isWithinWorkingHours(ownerId);
-    if (!active) {
-      console.log(`⏰ Автоответчик пользователя ${ownerId} сейчас выключен по расписанию.`);
-      return;
-    }
+    if (!active) return;
 
     // Анти-спам задержка (3 секунды)
     localPauses.set(chatId, Date.now() + ANTI_SPAM_PAUSE);
-    db.setPause(chatId, ANTI_SPAM_PAUSE).catch(() => {});
+    if (db.setPause) db.setPause(chatId, ANTI_SPAM_PAUSE).catch(() => {});
 
     // ПОЛУЧЕНИЕ НАСТРОЙКИ
     let replyText = replyCache.get(ownerId);
@@ -242,7 +385,7 @@ bot.on('business_message', async (ctx) => {
     }
 
     let incomingContent = businessMessage.text || businessMessage.caption || '[Медиа]';
-    db.saveMessage(chatId, 'user', incomingContent).catch(() => {});
+    if (db.saveMessage) db.saveMessage(chatId, 'user', incomingContent).catch(() => {});
 
     // А) КОМБО (ТЕКСТ + СТИКЕР)
     if (replyText && replyText.startsWith('combo:')) {
@@ -256,7 +399,7 @@ bot.on('business_message', async (ctx) => {
       if (stickerToReply) {
         await ctx.api.sendSticker(chatId, stickerToReply, { business_connection_id: connectionId });
       }
-      db.saveMessage(chatId, 'assistant', `[Комбо: Текст + Стикер]`).catch(() => {});
+      if (db.saveMessage) db.saveMessage(chatId, 'assistant', `[Комбо: Текст + Стикер]`).catch(() => {});
       return;
     }
 
@@ -264,7 +407,7 @@ bot.on('business_message', async (ctx) => {
     if (replyText && replyText.startsWith('voice:')) {
       const voiceFileId = replyText.replace('voice:', '').trim();
       await ctx.api.sendVoice(chatId, voiceFileId, { business_connection_id: connectionId });
-      db.saveMessage(chatId, 'assistant', `[Голосовое]`).catch(() => {});
+      if (db.saveMessage) db.saveMessage(chatId, 'assistant', `[Голосовое]`).catch(() => {});
       return;
     }
 
@@ -272,7 +415,7 @@ bot.on('business_message', async (ctx) => {
     if (replyText && replyText.startsWith('sticker:')) {
       const stickerFileId = replyText.replace('sticker:', '').trim();
       await ctx.api.sendSticker(chatId, stickerFileId, { business_connection_id: connectionId });
-      db.saveMessage(chatId, 'assistant', `[Стикер]`).catch(() => {});
+      if (db.saveMessage) db.saveMessage(chatId, 'assistant', `[Стикер]`).catch(() => {});
       return;
     }
 
@@ -283,7 +426,7 @@ bot.on('business_message', async (ctx) => {
 
     // Д) ТЕКСТ
     await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
-    db.saveMessage(chatId, 'assistant', replyText).catch(() => {});
+    if (db.saveMessage) db.saveMessage(chatId, 'assistant', replyText).catch(() => {});
 
   } catch (error) {
     console.error('❌ Ошибка в бизнес-сообщении:', error);
