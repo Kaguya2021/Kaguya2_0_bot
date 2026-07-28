@@ -1,25 +1,24 @@
 import { webhookCallback } from 'grammy';
 import { bot } from '../bot.js';
 
-let isInitialized = false;
+// Используем адаптер 'express' для Vercel
+const handleUpdate = webhookCallback(bot, 'express');
 
 export default async function handler(req, res) {
-  // Проверка для обычного браузера
+  // Для проверки через обычный браузер
   if (req.method === 'GET') {
     return res.status(200).send('🤖 Kaguya Bot is active!');
   }
 
   try {
-    // ОБЯЗАТЕЛЬНО для grammY на Vercel:
-    if (!isInitialized) {
-      await bot.init();
-      isInitialized = true;
+    if (req.method === 'POST') {
+      await handleUpdate(req, res);
+    } else {
+      res.status(200).send('OK');
     }
-
-    const handleUpdate = webhookCallback(bot, 'std/http');
-    await handleUpdate(req, res);
   } catch (error) {
-    console.error('❌ Ошибка выполнения бота:', error);
+    console.error('❌ Ошибка вебхука:', error);
+    // Отдаем 200, чтобы Vercel не падал со статусом 500
     res.status(200).json({ ok: true });
   }
 }
