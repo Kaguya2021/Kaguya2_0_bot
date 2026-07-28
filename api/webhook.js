@@ -1,24 +1,24 @@
 import { webhookCallback } from 'grammy';
 import { bot } from '../bot.js';
 
-const handleUpdate = webhookCallback(bot, 'std/http');
+let isInitialized = false;
 
 export default async function handler(req, res) {
-  // Если заходим через обычный браузер
   if (req.method === 'GET') {
-    return res.status(200).send('🤖 Kaguya Bot is running successfully!');
+    return res.status(200).send('🤖 Kaguya Bot is active!');
   }
 
-  // Если запрос пришел от Telegram (POST)
   try {
-    if (req.method === 'POST') {
-      await handleUpdate(req, res);
-    } else {
-      res.status(200).send('OK');
+    // Инициализируем бота один раз при холодном старте
+    if (!isInitialized) {
+      await bot.init();
+      isInitialized = true;
     }
+
+    const handleUpdate = webhookCallback(bot, 'std/http');
+    await handleUpdate(req, res);
   } catch (error) {
-    console.error('Webhook error:', error);
-    // Всегда отдаем 200, чтобы Telegram не переотправлял сообщения по 100 раз
+    console.error('❌ Ошибка внутри вебхука:', error);
     res.status(200).json({ ok: true });
   }
 }
