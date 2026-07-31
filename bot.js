@@ -88,7 +88,7 @@ bot.command('my', async (ctx) => {
   await ctx.reply(`✍️ <b>Ваш текущий автоответ:</b>\n\n${currentReply}`, { parse_mode: 'HTML' });
 });
 
-// --- КОМАНДА /reset ИЛИ /clear (Сброс автоответа) ---
+// --- КОМАНДА /reset ИЛИ /clear (Сброс своего автоответа) ---
 bot.command(['reset', 'clear'], async (ctx) => {
   const userId = String(ctx.from.id);
   replyCache.delete(userId);
@@ -96,6 +96,42 @@ bot.command(['reset', 'clear'], async (ctx) => {
   stepState.delete(userId);
 
   await ctx.reply('🗑️ <b>Ваш автоответ успешно сброшен!</b> Теперь будет отправляться стандартный дефолтный текст.', { parse_mode: 'HTML' });
+});
+
+// --- АДМИН-КОМАНДА /setreply (Изменение автоответа любого пользователя) ---
+bot.command('setreply', async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return;
+
+  const fullText = ctx.message.text.replace(/^\/setreply\s*/i, '').trim();
+  const args = fullText.split(/\s+/);
+  const targetId = args[0];
+  const newReply = args.slice(1).join(' ');
+
+  if (!targetId || !newReply) {
+    return await ctx.reply(
+      '👑 <b>Использование админ-редактора автоответа:</b>\n\n' +
+      '• <b>Текст:</b> <code>/setreply ID Новый текст</code>\n' +
+      '• <b>Сброс:</b> <code>/setreply ID clear</code>\n' +
+      '• <b>Голос:</b> <code>/setreply ID voice:FILE_ID</code>\n' +
+      '• <b>Комбо:</b> <code>/setreply ID combo:Текст|||STICKER_ID</code>',
+      { parse_mode: 'HTML' }
+    );
+  }
+
+  try {
+    if (newReply.toLowerCase() === 'clear') {
+      replyCache.delete(targetId);
+      await db.setCustomReply(targetId, null);
+      return await ctx.reply(`✅ Автоответ для ID <code>${targetId}</code> успешно сброшен на стандартный!`, { parse_mode: 'HTML' });
+    }
+
+    replyCache.set(targetId, newReply);
+    await db.setCustomReply(targetId, newReply);
+
+    await ctx.reply(`👑 <b>Успешно отредактировано!</b>\n\nНовый автоответ для ID <code>${targetId}</code>:\n<code>${newReply}</code>`, { parse_mode: 'HTML' });
+  } catch (e) {
+    await ctx.reply(`❌ Ошибка при изменении: ${e.message}`);
+  }
 });
 
 // --- АДМИН-КОМАНДЫ: /stop И /unstop ---
@@ -474,3 +510,4 @@ bot.on('business_message', async (ctx) => {
     console.error('❌ Ошибка в бизнес-сообщении:', error);
   }
 });
+      
