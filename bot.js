@@ -299,16 +299,23 @@ bot.on('message', async (ctx, next) => {
   return next();
 });
 
-// --- ВНИМАНИЕ: ФУНКЦИЯ ПРОВЕРКИ РАБОЧИХ ЧАСОВ ---
+// --- ИСПРАВЛЕННАЯ ФУНКЦИЯ ПРОВЕРКИ РАБОЧИХ ЧАСОВ (UTC+6) ---
 async function isWithinWorkingHours(ownerId) {
   try {
     if (!ownerId) return true;
     const schedule = await db.getSchedule(ownerId);
     if (!schedule || !schedule.start_time || !schedule.end_time) return true;
 
-    const now = new Date();
-    const utcHours = now.getUTCHours() + 6;
-    const currentMinutes = (utcHours % 24) * 60 + now.getUTCMinutes();
+    // Считываем точное время часового пояса (Asia/Bishkek UTC+6)
+    const nowStr = new Date().toLocaleTimeString('ru-RU', {
+      timeZone: 'Asia/Bishkek',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    });
+
+    const [curH, curM] = nowStr.split(':').map(Number);
+    const currentMinutes = curH * 60 + curM;
 
     const [startH, startM] = schedule.start_time.split(':').map(Number);
     const [endH, endM] = schedule.end_time.split(':').map(Number);
@@ -322,6 +329,7 @@ async function isWithinWorkingHours(ownerId) {
       return currentMinutes >= startMinutes || currentMinutes <= endMinutes;
     }
   } catch (e) {
+    console.error('Ошибка при проверке рабочего времени:', e);
     return true;
   }
 }
@@ -377,7 +385,7 @@ bot.on('business_message', async (ctx) => {
     // Анти-спам задержка (3 секунды)
     localPauses.set(chatId, Date.now() + ANTI_SPAM_PAUSE);
 
-        // 5. ПОИСК НАСТРОЕК АВТООТВЕТА
+    // 5. ПОИСК НАСТРОЕК АВТООТВЕТА
     let replyText = null;
 
     if (ownerId) {
@@ -387,7 +395,7 @@ bot.on('business_message', async (ctx) => {
     // ЕСЛИ У ПОЛЬЗОВАТЕЛЯ НЕТ СВОЕГО ТЕКСТА — СТАВИМ ДЕФОЛТНЫЙ
     if (!replyText) {
       replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
-    } else {
+    } else if (ownerId) {
       replyCache.set(ownerId, replyText);
     }
 
@@ -396,7 +404,7 @@ bot.on('business_message', async (ctx) => {
     if (db.saveMessage) db.saveMessage(chatId, 'user', incomingContent).catch(() => {});
 
     // А) КОМБО (ТЕКСТ + СТИКЕР)
-    if (replyText && replyText.startsWith('combo:')) {
+    if (replyText.startsWith('combo:')) {
       const parts = replyText.replace('combo:', '').split('|||');
       const textToReply = parts[0];
       const stickerToReply = parts[1];
@@ -412,7 +420,7 @@ bot.on('business_message', async (ctx) => {
     }
 
     // Б) ГОЛОСОВОЕ
-    if (replyText && replyText.startsWith('voice:')) {
+    if (replyText.startsWith('voice:')) {
       const voiceFileId = replyText.replace('voice:', '').trim();
       await ctx.api.sendVoice(chatId, voiceFileId, { business_connection_id: connectionId });
       if (db.saveMessage) db.saveMessage(chatId, 'assistant', `[Голосовое]`).catch(() => {});
@@ -420,19 +428,14 @@ bot.on('business_message', async (ctx) => {
     }
 
     // В) СТИКЕР
-    if (replyText && replyText.startsWith('sticker:')) {
+    if (replyText.startsWith('sticker:')) {
       const stickerFileId = replyText.replace('sticker:', '').trim();
       await ctx.api.sendSticker(chatId, stickerFileId, { business_connection_id: connectionId });
       if (db.saveMessage) db.saveMessage(chatId, 'assistant', `[Стикер]`).catch(() => {});
       return;
     }
 
-    // Г) ДЕФОЛТНЫЙ ТЕКСТ
-    if (!replyText) {
-      replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
-    }
-
-    // Д) ТЕКСТ
+    // Г) ТЕКСТ
     await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
     if (db.saveMessage) db.saveMessage(chatId, 'assistant', replyText).catch(() => {});
 
@@ -440,3 +443,4 @@ bot.on('business_message', async (ctx) => {
     console.error('❌ Ошибка в бизнес-сообщении:', error);
   }
 });
+    
