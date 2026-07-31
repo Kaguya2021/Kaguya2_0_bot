@@ -45,6 +45,8 @@ bot.command('start', async (ctx) => {
     '✍️ <b>Обычный текст:</b> <code>/set Твой текст</code>\n' +
     '🎤 <b>Голосовое:</b> <code>/set gs</code>\n' +
     '🖼️ <b>Комбо (Текст + Стикер):</b> <code>/sred</code>\n' +
+    '🔍 <b>Мой автоответ:</b> <code>/my</code>\n' +
+    '🗑️ <b>Сбросить автоответ:</b> <code>/reset</code>\n' +
     '⏰ <b>Рабочие часы:</b> <code>/time 05:00 20:00</code> (Задать время работы)\n' +
     '❌ <b>Сбросить часы:</b> <code>/time off</code>';
 
@@ -62,6 +64,38 @@ bot.command('admins', async (ctx) => {
     '💬 Если вы хотите получить доступ или задать вопрос, попробуйте написать создателю бота (но не факт, что он сделает вас админом!).',
     { parse_mode: 'HTML' }
   );
+});
+
+// --- КОМАНДА /my (Просмотр своего автоответа) ---
+bot.command('my', async (ctx) => {
+  const userId = String(ctx.from.id);
+  const currentReply = replyCache.get(userId) || await db.getCustomReply(userId).catch(() => null);
+
+  if (!currentReply) {
+    return await ctx.reply('ℹ️ У вас установлен <b>дефолтный текст</b>:\n<i>Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓</i>', { parse_mode: 'HTML' });
+  }
+
+  if (currentReply.startsWith('combo:')) {
+    const parts = currentReply.replace('combo:', '').split('|||');
+    return await ctx.reply(`🔥 <b>Ваш автоответ (Комбо):</b>\n\n📝 Текст: <code>${parts[0]}</code>\n🖼️ Sticker ID: <code>${parts[1]}</code>`, { parse_mode: 'HTML' });
+  }
+
+  if (currentReply.startsWith('voice:')) {
+    const voiceId = currentReply.replace('voice:', '');
+    return await ctx.reply(`🎤 <b>Ваш автоответ (Голосовое):</b>\nID файла: <code>${voiceId}</code>`, { parse_mode: 'HTML' });
+  }
+
+  await ctx.reply(`✍️ <b>Ваш текущий автоответ:</b>\n\n${currentReply}`, { parse_mode: 'HTML' });
+});
+
+// --- КОМАНДА /reset ИЛИ /clear (Сброс автоответа) ---
+bot.command(['reset', 'clear'], async (ctx) => {
+  const userId = String(ctx.from.id);
+  replyCache.delete(userId);
+  await db.setCustomReply(userId, null).catch(console.error);
+  stepState.delete(userId);
+
+  await ctx.reply('🗑️ <b>Ваш автоответ успешно сброшен!</b> Теперь будет отправляться стандартный дефолтный текст.', { parse_mode: 'HTML' });
 });
 
 // --- АДМИН-КОМАНДЫ: /stop И /unstop ---
