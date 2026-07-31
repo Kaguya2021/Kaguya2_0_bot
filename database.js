@@ -88,7 +88,6 @@ export const db = {
   // 2. Получение ВСЕХ юзеров для рассылки (/post и /m)
   getAllUsers: async () => {
     await ensureDbInit();
-    // Собираем уникальные ID из таблицы юзеров и настроек
     const query = `
       SELECT DISTINCT user_id FROM (
         SELECT user_id FROM users
@@ -153,6 +152,12 @@ export const db = {
       DO UPDATE SET pause_until = EXCLUDED.pause_until;
     `;
     return pool.query(query, [chatId, pauseUntil]);
+  },
+
+  removePause: async (chatId) => {
+    await ensureDbInit();
+    const query = `DELETE FROM chat_pauses WHERE chat_id = $1;`;
+    return pool.query(query, [chatId]);
   },
 
   isPaused: async (chatId) => {
