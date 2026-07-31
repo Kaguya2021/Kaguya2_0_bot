@@ -299,23 +299,20 @@ bot.on('message', async (ctx, next) => {
   return next();
 });
 
-// --- ИСПРАВЛЕННАЯ ФУНКЦИЯ ПРОВЕРКИ РАБОЧИХ ЧАСОВ (UTC+6) ---
+// --- ФУНКЦИЯ ПРОВЕРКИ РАБОЧИХ ЧАСОВ ---
 async function isWithinWorkingHours(ownerId) {
   try {
     if (!ownerId) return true;
+
+    // ЕСЛИ НАПИСАЛ АДМИН/ВЛАДЕЛЕЦ БОТА — РАБОТАЕТ ВСЕГДА КРУГЛОСУТОЧНО
+    if (isAdmin(ownerId)) return true;
+
     const schedule = await db.getSchedule(ownerId);
     if (!schedule || !schedule.start_time || !schedule.end_time) return true;
 
-    // Считываем точное время часового пояса (Asia/Bishkek UTC+6)
-    const nowStr = new Date().toLocaleTimeString('ru-RU', {
-      timeZone: 'Asia/Bishkek',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    });
-
-    const [curH, curM] = nowStr.split(':').map(Number);
-    const currentMinutes = curH * 60 + curM;
+    // Расчет времени по UTC
+    const now = new Date();
+    const currentMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
 
     const [startH, startM] = schedule.start_time.split(':').map(Number);
     const [endH, endM] = schedule.end_time.split(':').map(Number);
@@ -378,7 +375,7 @@ bot.on('business_message', async (ctx) => {
     const isDbPaused = await db.isPaused?.(chatId).catch(() => false);
     if (isDbPaused) return;
 
-    // 4. ПРОВЕРКА РАБОЧИХ ЧАСОВ ПОЛЬЗОВАТЕЛЯ
+    // 4. ПРОВЕРКА РАБОЧИХ ЧАСОВ ПОЛЬЗОВАТЕЛЯ (Админы всегда активны)
     const active = await isWithinWorkingHours(ownerId);
     if (!active) return;
 
@@ -443,4 +440,3 @@ bot.on('business_message', async (ctx) => {
     console.error('❌ Ошибка в бизнес-сообщении:', error);
   }
 });
-    
