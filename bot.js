@@ -65,26 +65,31 @@ bot.command('admins', async (ctx) => {
   );
 });
 
-// --- КОМАНДА /my ---
-bot.command('my', async (ctx) => {
-  const userId = String(ctx.from.id);
-  const currentReply = replyCache.get(userId) || await db.getCustomReply(userId).catch(() => null);
+// --- АДМИН-КОМАНДА /info ---
+bot.command('info', async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return;
+  const args = ctx.message.text.trim().split(/\s+/);
+  const targetId = args[1];
 
-  if (!currentReply) {
-    return await ctx.reply('ℹ️ У вас установлен <b>дефолтный текст</b>:\n<i>Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓</i>', { parse_mode: 'HTML' });
+  if (!targetId) {
+    return await ctx.reply('❌ Укажите ID: <code>/info &lt;USER_ID&gt;</code>', { parse_mode: 'HTML' });
   }
 
-  if (currentReply.startsWith('combo:')) {
-    const parts = currentReply.replace('combo:', '').split('|||');
-    return await ctx.reply(`🔥 <b>Ваш автоответ (Комбо):</b>\n\n📝 Текст: <code>${parts[0]}</code>\n🖼️ Sticker ID: <code>${parts[1]}</code>`, { parse_mode: 'HTML' });
-  }
+  try {
+    const userInfo = (await db.getUserInfo?.(targetId)) || {};
+    const customReply = (await db.getCustomReply?.(targetId)) || 'Стандартный дефолтный текст';
+    const schedule = (await db.getSchedule?.(targetId)) || null;
 
-  if (currentReply.startsWith('voice:')) {
-    const voiceId = currentReply.replace('voice:', '');
-    return await ctx.reply(`🎤 <b>Ваш автоответ (Голосовое):</b>\nID файла: <code>${voiceId}</code>`, { parse_mode: 'HTML' });
-  }
+    let infoText = `📊 <b>Информация о пользователе ID:</b> <code>${targetId}</code>\n\n`;
+    infoText += `📅 <b>Подключен:</b> ${userInfo.created_at || 'Неизвестно'}\n`;
+    infoText += `👤 <b>Username/Имя:</b> ${userInfo.username || 'Нет данных'}\n`;
+    infoText += `💬 <b>Текущий автоответ:</b>\n<code>${customReply}</code>\n\n`;
+    infoText += `⏰ <b>График работы:</b> ${schedule?.start_time ? `${schedule.start_time} - ${schedule.end_time}` : 'Круглосуточно'}`;
 
-  await ctx.reply(`✍️ <b>Ваш текущий автоответ:</b>\n\n${currentReply}`, { parse_mode: 'HTML' });
+    await ctx.reply(infoText, { parse_mode: 'HTML' });
+  } catch (e) {
+    await ctx.reply(`❌ Ошибка получения информации: ${e.message}`);
+  }
 });
 
 // --- КОМАНДА /reset ИЛИ /clear ---
