@@ -65,31 +65,26 @@ bot.command('admins', async (ctx) => {
   );
 });
 
-// --- АДМИН-КОМАНДА /info ---
-bot.command('info', async (ctx) => {
-  if (!isAdmin(ctx.from.id)) return;
-  const args = ctx.message.text.trim().split(/\s+/);
-  const targetId = args[1];
+// --- КОМАНДА /my ---
+bot.command('my', async (ctx) => {
+  const userId = String(ctx.from.id);
+  const currentReply = replyCache.get(userId) || await db.getCustomReply(userId).catch(() => null);
 
-  if (!targetId) {
-    return await ctx.reply('❌ Укажите ID: <code>/info &lt;USER_ID&gt;</code>', { parse_mode: 'HTML' });
+  if (!currentReply) {
+    return await ctx.reply('ℹ️ У вас установлен <b>дефолтный текст</b>:\n<i>Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓</i>', { parse_mode: 'HTML' });
   }
 
-  try {
-    const userInfo = (await db.getUserInfo?.(targetId)) || {};
-    const customReply = (await db.getCustomReply?.(targetId)) || 'Стандартный дефолтный текст';
-    const schedule = (await db.getSchedule?.(targetId)) || null;
-
-    let infoText = `📊 <b>Информация о пользователе ID:</b> <code>${targetId}</code>\n\n`;
-    infoText += `📅 <b>Подключен:</b> ${userInfo.created_at || 'Неизвестно'}\n`;
-    infoText += `👤 <b>Username/Имя:</b> ${userInfo.username || 'Нет данных'}\n`;
-    infoText += `💬 <b>Текущий автоответ:</b>\n<code>${customReply}</code>\n\n`;
-    infoText += `⏰ <b>График работы:</b> ${schedule?.start_time ? `${schedule.start_time} - ${schedule.end_time}` : 'Круглосуточно'}`;
-
-    await ctx.reply(infoText, { parse_mode: 'HTML' });
-  } catch (e) {
-    await ctx.reply(`❌ Ошибка получения информации: ${e.message}`);
+  if (currentReply.startsWith('combo:')) {
+    const parts = currentReply.replace('combo:', '').split('|||');
+    return await ctx.reply(`🔥 <b>Ваш автоответ (Комбо):</b>\n\n📝 Текст: <code>${parts[0]}</code>\n🖼️ Sticker ID: <code>${parts[1]}</code>`, { parse_mode: 'HTML' });
   }
+
+  if (currentReply.startsWith('voice:')) {
+    const voiceId = currentReply.replace('voice:', '');
+    return await ctx.reply(`🎤 <b>Ваш автоответ (Голосовое):</b>\nID файла: <code>${voiceId}</code>`, { parse_mode: 'HTML' });
+  }
+
+  await ctx.reply(`✍️ <b>Ваш текущий автоответ:</b>\n\n${currentReply}`, { parse_mode: 'HTML' });
 });
 
 // --- КОМАНДА /reset ИЛИ /clear ---
@@ -155,7 +150,7 @@ bot.command('stop', async (ctx) => {
     return await ctx.reply(`🛑 Автоответчик остановлен для пользователя ID: <code>${target}</code>`, { parse_mode: 'HTML' });
   }
 
-  await ctx.reply('❌ Использование: <code>/stop all</code> или <code>/stop <USER_ID></code>', { parse_mode: 'HTML' });
+  await ctx.reply('❌ Использование: <code>/stop all</code> или <code>/stop &lt;USER_ID&gt;</code>', { parse_mode: 'HTML' });
 });
 
 bot.command('unstop', async (ctx) => {
@@ -174,7 +169,7 @@ bot.command('unstop', async (ctx) => {
     return await ctx.reply(`✅ Автоответчик снова возобновлен для пользователя ID: <code>${target}</code>`, { parse_mode: 'HTML' });
   }
 
-  await ctx.reply('❌ Использование: <code>/unstop all</code> или <code>/unstop <USER_ID></code>', { parse_mode: 'HTML' });
+  await ctx.reply('❌ Использование: <code>/unstop all</code> или <code>/unstop &lt;USER_ID&gt;</code>', { parse_mode: 'HTML' });
 });
 
 // --- АДМИН-КОМАНДА /m (ОПТИМИЗИРОВАННАЯ ФОНОВАЯ РАССЫЛКА) ---
@@ -211,7 +206,7 @@ bot.command('mm', async (ctx) => {
   const messageText = args.slice(1).join(' ');
 
   if (!targetId || !messageText) {
-    return await ctx.reply('❌ Использование: <code>/mm <ID> <Сообщение></code>', { parse_mode: 'HTML' });
+    return await ctx.reply('❌ Использование: <code>/mm &lt;ID&gt; &lt;Сообщение&gt;</code>', { parse_mode: 'HTML' });
   }
 
   try {
@@ -229,7 +224,7 @@ bot.command('info', async (ctx) => {
   const targetId = args[1];
 
   if (!targetId) {
-    return await ctx.reply('❌ Укажите ID: <code>/info <USER_ID></code>', { parse_mode: 'HTML' });
+    return await ctx.reply('❌ Укажите ID: <code>/info &lt;USER_ID&gt;</code>', { parse_mode: 'HTML' });
   }
 
   try {
