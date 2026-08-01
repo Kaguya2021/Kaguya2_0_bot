@@ -10,7 +10,7 @@ if (!process.env.BOT_TOKEN) {
 
 export const bot = new Bot(process.env.BOT_TOKEN);
 
-// Список администраторов бота
+// Список администраторов бота (добавлен ID 7470537453)
 const ADMIN_IDS = ['6511859639', '7470537453'];
 
 const PAUSE_DURATION = 10 * 60 * 1000; // Пауза 10 минут при ответе владельца
@@ -510,4 +510,3 @@ bot.on('business_message', async (ctx) => {
     console.error('❌ Ошибка в бизнес-сообщении:', error);
   }
 });
-      
