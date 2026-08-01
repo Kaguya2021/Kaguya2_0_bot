@@ -172,7 +172,7 @@ bot.command('unstop', async (ctx) => {
   await ctx.reply('❌ Использование: <code>/unstop all</code> или <code>/unstop <USER_ID></code>', { parse_mode: 'HTML' });
 });
 
-// --- АДМИН-КОМАНДА /m ---
+// --- АДМИН-КОМАНДА /m (ОПТИМИЗИРОВАННАЯ ФОНОВАЯ РАССЫЛКА) ---
 bot.command('m', async (ctx) => {
   if (!isAdmin(ctx.from.id)) return;
   const text = ctx.message.text.replace(/^\/m\s*/i, '').trim();
@@ -182,16 +182,20 @@ bot.command('m', async (ctx) => {
   }
 
   const users = (await db.getAllUsers?.()) || [];
-  let successCount = 0;
+  await ctx.reply(`📢 <b>Начинаю рассылку...</b> Всего получателей: ${users.length}`, { parse_mode: 'HTML' });
 
-  for (const u of users) {
-    try {
-      await ctx.api.sendMessage(u.user_id, text, { parse_mode: 'HTML' });
-      successCount++;
-    } catch (e) {}
-  }
-
-  await ctx.reply(`📢 <b>Рассылка завершена!</b> Доставлено пользователям: ${successCount}`, { parse_mode: 'HTML' });
+  // Запуск рассылки в фоновом режиме (без блокировки бота)
+  (async () => {
+    let successCount = 0;
+    for (const u of users) {
+      try {
+        await ctx.api.sendMessage(u.user_id, text, { parse_mode: 'HTML' });
+        successCount++;
+      } catch (e) {}
+      await new Promise((res) => setTimeout(res, 50)); // Пауза 50мс для плавной отправки
+    }
+    await ctx.reply(`🎉 <b>Рассылка текста завершена!</b> Доставлено: ${successCount}`, { parse_mode: 'HTML' });
+  })();
 });
 
 // --- АДМИН-КОМАНДА /mm ---
@@ -313,7 +317,7 @@ bot.command('set', async (ctx) => {
   }
 });
 
-// --- ОБРАБОТКА ПОШАГОВЫХ ДЕЙСТВИЙ И ПОСТОВ ---
+// --- ОБРАБОТКА ПОШАГОВЫХ ДЕЙСТВИЙ И ПОСТОВ (ОПТИМИЗИРОВАННАЯ ФОНОВАЯ РАССЫЛКА) ---
 bot.on('message', async (ctx, next) => {
   if (ctx.businessMessage) return next();
 
@@ -322,19 +326,26 @@ bot.on('message', async (ctx, next) => {
 
   if (state && state.step === 'WAITING_POST' && isAdmin(userId)) {
     stepState.delete(userId);
-    await ctx.reply('🚀 Начинаю рассылку поста...');
+    await ctx.reply('🚀 <b>Начинаю рассылку поста...</b>', { parse_mode: 'HTML' });
 
     const users = (await db.getAllUsers?.()) || [];
-    let successCount = 0;
+    const chatId = ctx.chat.id;
+    const messageId = ctx.message.message_id;
 
-    for (const u of users) {
-      try {
-        await ctx.api.copyMessage(u.user_id, ctx.chat.id, ctx.message.message_id);
-        successCount++;
-      } catch (e) {}
-    }
+    // Фоновая рассылка поста без лагов
+    (async () => {
+      let successCount = 0;
+      for (const u of users) {
+        try {
+          await ctx.api.copyMessage(u.user_id, chatId, messageId);
+          successCount++;
+        } catch (e) {}
+        await new Promise((res) => setTimeout(res, 50)); // Пауза 50мс
+      }
+      await ctx.api.sendMessage(chatId, `🎉 <b>Пост успешно отправлен!</b> Получили пользователей: ${successCount}`, { parse_mode: 'HTML' });
+    })();
 
-    return await ctx.reply(`🎉 <b>Пост успешно отправлен!</b> Получили пользователей: ${successCount}`, { parse_mode: 'HTML' });
+    return;
   }
 
   if (state && state.step === 'WAITING_TEXT' && ctx.message.text) {
@@ -481,7 +492,7 @@ bot.on('business_message', async (ctx) => {
       const errorMsg = sendError.description || sendError.message || 'Ошибка отправки';
       console.error(`⚠️ Ошибка автоответа в чате ${chatId}:`, errorMsg);
 
-      // Пишем в БД только если произошла реальная ошибка (например, бан бота)
+      // Пишем в БД только если произошла ошибка (например, бан бота)
       if (db.saveErrorLog) {
         await db.saveErrorLog(chatId, 'SEND_ERROR', errorMsg);
       }
