@@ -10,8 +10,8 @@ if (!process.env.BOT_TOKEN) {
 
 export const bot = new Bot(process.env.BOT_TOKEN);
 
-// Список администраторов бота (добавлен ID 7470537453)
-const ADMIN_IDS = ['6511859639', '7470537453'];
+// Список администраторов бота
+const ADMIN_IDS = ['6511859639'];
 
 const PAUSE_DURATION = 10 * 60 * 1000; // Пауза 10 минут при ответе владельца
 const ANTI_SPAM_PAUSE = 3000;          // Анти-спам пауза 3 секунды
