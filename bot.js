@@ -32,7 +32,6 @@ function isAdmin(userId) {
 bot.command('start', async (ctx) => {
   const userId = String(ctx.from.id);
   
-  // Регистрация/обновление пользователя в БД
   if (db.registerUser) {
     db.registerUser(userId, ctx.from.username || ctx.from.first_name).catch(() => {});
   }
@@ -66,7 +65,7 @@ bot.command('admins', async (ctx) => {
   );
 });
 
-// --- КОМАНДА /my (Просмотр своего автоответа) ---
+// --- КОМАНДА /my ---
 bot.command('my', async (ctx) => {
   const userId = String(ctx.from.id);
   const currentReply = replyCache.get(userId) || await db.getCustomReply(userId).catch(() => null);
@@ -88,7 +87,7 @@ bot.command('my', async (ctx) => {
   await ctx.reply(`✍️ <b>Ваш текущий автоответ:</b>\n\n${currentReply}`, { parse_mode: 'HTML' });
 });
 
-// --- КОМАНДА /reset ИЛИ /clear (Сброс своего автоответа) ---
+// --- КОМАНДА /reset ИЛИ /clear ---
 bot.command(['reset', 'clear'], async (ctx) => {
   const userId = String(ctx.from.id);
   replyCache.delete(userId);
@@ -98,7 +97,7 @@ bot.command(['reset', 'clear'], async (ctx) => {
   await ctx.reply('🗑️ <b>Ваш автоответ успешно сброшен!</b> Теперь будет отправляться стандартный дефолтный текст.', { parse_mode: 'HTML' });
 });
 
-// --- АДМИН-КОМАНДА /setreply (Изменение автоответа любого пользователя) ---
+// --- АДМИН-КОМАНДА /setreply ---
 bot.command('setreply', async (ctx) => {
   if (!isAdmin(ctx.from.id)) return;
 
@@ -146,7 +145,7 @@ bot.command('stop', async (ctx) => {
   }
 
   if (target) {
-    localPauses.set(target, Date.now() + 24 * 60 * 60 * 1000); // Остановка на 24ч
+    localPauses.set(target, Date.now() + 24 * 60 * 60 * 1000);
     if (db.setPause) db.setPause(target, 24 * 60 * 60 * 1000).catch(() => {});
     return await ctx.reply(`🛑 Автоответчик остановлен для пользователя ID: <code>${target}</code>`, { parse_mode: 'HTML' });
   }
@@ -173,7 +172,7 @@ bot.command('unstop', async (ctx) => {
   await ctx.reply('❌ Использование: <code>/unstop all</code> или <code>/unstop <USER_ID></code>', { parse_mode: 'HTML' });
 });
 
-// --- АДМИН-КОМАНДА /m (Рассылка текста) ---
+// --- АДМИН-КОМАНДА /m ---
 bot.command('m', async (ctx) => {
   if (!isAdmin(ctx.from.id)) return;
   const text = ctx.message.text.replace(/^\/m\s*/i, '').trim();
@@ -195,7 +194,7 @@ bot.command('m', async (ctx) => {
   await ctx.reply(`📢 <b>Рассылка завершена!</b> Доставлено пользователям: ${successCount}`, { parse_mode: 'HTML' });
 });
 
-// --- АДМИН-КОМАНДА /mm (Личное сообщение) ---
+// --- АДМИН-КОМАНДА /mm ---
 bot.command('mm', async (ctx) => {
   if (!isAdmin(ctx.from.id)) return;
   const args = ctx.message.text.replace(/^\/mm\s*/i, '').trim().split(/\s+/);
@@ -214,7 +213,7 @@ bot.command('mm', async (ctx) => {
   }
 });
 
-// --- АДМИН-КОМАНДА /info (Информация о пользователе) ---
+// --- АДМИН-КОМАНДА /info ---
 bot.command('info', async (ctx) => {
   if (!isAdmin(ctx.from.id)) return;
   const args = ctx.message.text.trim().split(/\s+/);
@@ -241,15 +240,15 @@ bot.command('info', async (ctx) => {
   }
 });
 
-// --- АДМИН-КОМАНДА /post (Мультимедиа рассылка) ---
+// --- АДМИН-КОМАНДА /post ---
 bot.command('post', async (ctx) => {
   if (!isAdmin(ctx.from.id)) return;
   const userId = String(ctx.from.id);
   stepState.set(userId, { step: 'WAITING_POST' });
-  await ctx.reply('📢 <b>Режим создания поста:</b>\n\nОтправьте следующий пост (это может быть текст, фото с подписью или стикер). Я разошлю его всем пользователям!', { parse_mode: 'HTML' });
+  await ctx.reply('📢 <b>Режим создания поста:</b>\n\nОтправьте следующий пост. Я разошлю его всем пользователям!', { parse_mode: 'HTML' });
 });
 
-// --- КОМАНДА /time (Настройка расписания) ---
+// --- КОМАНДА /time ---
 bot.command('time', async (ctx) => {
   try {
     const userId = String(ctx.from.id);
@@ -321,7 +320,6 @@ bot.on('message', async (ctx, next) => {
   const userId = String(ctx.from.id);
   const state = stepState.get(userId);
 
-  // Обработка /post рассылки для админа
   if (state && state.step === 'WAITING_POST' && isAdmin(userId)) {
     stepState.delete(userId);
     await ctx.reply('🚀 Начинаю рассылку поста...');
@@ -339,13 +337,11 @@ bot.on('message', async (ctx, next) => {
     return await ctx.reply(`🎉 <b>Пост успешно отправлен!</b> Получили пользователей: ${successCount}`, { parse_mode: 'HTML' });
   }
 
-  // Обработка /sred
   if (state && state.step === 'WAITING_TEXT' && ctx.message.text) {
     stepState.set(userId, { step: 'WAITING_STICKER', text: ctx.message.text });
     return await ctx.reply('🖼️ <b>Шаг 2/2:</b> Отправьте стикер или вставьте ID стикера:');
   }
 
-  // Обработка стикера для /sred
   if (state && state.step === 'WAITING_STICKER' && ctx.message.sticker) {
     const stickerId = ctx.message.sticker.file_id;
     const comboValue = `combo:${state.text}|||${stickerId}`;
@@ -356,7 +352,6 @@ bot.on('message', async (ctx, next) => {
     return await ctx.reply('🔥 <b>Отлично!</b> Комбо автоответ (Текст + Стикер) успешно установлен!', { parse_mode: 'HTML' });
   }
 
-  // Обработка голосового
   if (state && state.step === 'WAITING_VOICE' && ctx.message.voice) {
     const fileId = ctx.message.voice.file_id;
     const value = `voice:${fileId}`;
@@ -373,14 +368,11 @@ bot.on('message', async (ctx, next) => {
 async function isWithinWorkingHours(ownerId) {
   try {
     if (!ownerId) return true;
-
-    // ЕСЛИ НАПИСАЛ АДМИН/ВЛАДЕЛЕЦ БОТА — РАБОТАЕТ ВСЕГДА КРУГЛОСУТОЧНО
     if (isAdmin(ownerId)) return true;
 
     const schedule = await db.getSchedule(ownerId);
     if (!schedule || !schedule.start_time || !schedule.end_time) return true;
 
-    // Расчет времени по UTC
     const now = new Date();
     const currentMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
 
@@ -422,7 +414,6 @@ bot.on('business_message', async (ctx) => {
     processedMessages.add(uniqueKey);
     setTimeout(() => processedMessages.delete(uniqueKey), 30 * 1000);
 
-    // Получение подключения владельца
     let ownerId = null;
     try {
       const conn = await ctx.getBusinessConnection();
@@ -431,10 +422,9 @@ bot.on('business_message', async (ctx) => {
       }
     } catch (e) {}
 
-    // 2. ЕСЛИ НАПИСАЛ САМ ВЛАДЕЛЬЦ АККАУНТА — СТАВИМ ЛОКАЛЬНУЮ ПАУЗУ
+    // 2. ВЛАДЕЛЕЦ ОТВЕТИЛ САМ
     if (ownerId && senderId === ownerId) {
       localPauses.set(chatId, Date.now() + PAUSE_DURATION);
-      console.log(`🛑 Владелец ответил сам в чате ${chatId}. Пауза 10 мин.`);
       return;
     }
 
@@ -445,11 +435,10 @@ bot.on('business_message', async (ctx) => {
     const isDbPaused = await db.isPaused?.(chatId).catch(() => false);
     if (isDbPaused) return;
 
-    // 4. ПРОВЕРКА РАБОЧИХ ЧАСОВ ПОЛЬЗОВАТЕЛЯ (Админы всегда активны)
+    // 4. ПРОВЕРКА РАБОЧИХ ЧАСОВ
     const active = await isWithinWorkingHours(ownerId);
     if (!active) return;
 
-    // Анти-спам задержка (3 секунды)
     localPauses.set(chatId, Date.now() + ANTI_SPAM_PAUSE);
 
     // 5. ПОИСК НАСТРОЕК АВТООТВЕТА
@@ -459,52 +448,44 @@ bot.on('business_message', async (ctx) => {
       replyText = replyCache.get(ownerId) || await db.getCustomReply(ownerId).catch(() => null);
     }
 
-    // ЕСЛИ У ПОЛЬЗОВАТЕЛЯ НЕТ СВОЕГО ТЕКСТА — СТАВИМ ДЕФОЛТНЫЙ
     if (!replyText) {
       replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
     } else if (ownerId) {
       replyCache.set(ownerId, replyText);
     }
 
-    // 6. ОТПРАВКА ОТВЕТА
-    let incomingContent = businessMessage.text || businessMessage.caption || '[Медиа]';
-    if (db.saveMessage) db.saveMessage(chatId, 'user', incomingContent).catch(() => {});
-
-    // А) КОМБО (ТЕКСТ + СТИКЕР)
-    if (replyText.startsWith('combo:')) {
-      const parts = replyText.replace('combo:', '').split('|||');
-      const textToReply = parts[0];
-      const stickerToReply = parts[1];
-
-      if (textToReply) {
-        await ctx.api.sendMessage(chatId, textToReply, { business_connection_id: connectionId, parse_mode: 'HTML' });
+    // 6. ОТПРАВКА ОТВЕТА (ЗАПИСЬ В БД ТОЛЬКО ПРИ ОШИБКАХ/БАНАХ)
+    try {
+      if (replyText.startsWith('combo:')) {
+        const parts = replyText.replace('combo:', '').split('|||');
+        if (parts[0]) await ctx.api.sendMessage(chatId, parts[0], { business_connection_id: connectionId, parse_mode: 'HTML' });
+        if (parts[1]) await ctx.api.sendSticker(chatId, parts[1], { business_connection_id: connectionId });
+        return;
       }
-      if (stickerToReply) {
-        await ctx.api.sendSticker(chatId, stickerToReply, { business_connection_id: connectionId });
+
+      if (replyText.startsWith('voice:')) {
+        const voiceFileId = replyText.replace('voice:', '').trim();
+        await ctx.api.sendVoice(chatId, voiceFileId, { business_connection_id: connectionId });
+        return;
       }
-      if (db.saveMessage) db.saveMessage(chatId, 'assistant', `[КомБО: Текст + Стикер]`).catch(() => {});
-      return;
-    }
 
-    // Б) ГОЛОСОВОЕ
-    if (replyText.startsWith('voice:')) {
-      const voiceFileId = replyText.replace('voice:', '').trim();
-      await ctx.api.sendVoice(chatId, voiceFileId, { business_connection_id: connectionId });
-      if (db.saveMessage) db.saveMessage(chatId, 'assistant', `[Голосовое]`).catch(() => {});
-      return;
-    }
+      if (replyText.startsWith('sticker:')) {
+        const stickerFileId = replyText.replace('sticker:', '').trim();
+        await ctx.api.sendSticker(chatId, stickerFileId, { business_connection_id: connectionId });
+        return;
+      }
 
-    // В) СТИКЕР
-    if (replyText.startsWith('sticker:')) {
-      const stickerFileId = replyText.replace('sticker:', '').trim();
-      await ctx.api.sendSticker(chatId, stickerFileId, { business_connection_id: connectionId });
-      if (db.saveMessage) db.saveMessage(chatId, 'assistant', `[Стикер]`).catch(() => {});
-      return;
-    }
+      await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
 
-    // Г) ТЕКСТ
-    await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
-    if (db.saveMessage) db.saveMessage(chatId, 'assistant', replyText).catch(() => {});
+    } catch (sendError) {
+      const errorMsg = sendError.description || sendError.message || 'Ошибка отправки';
+      console.error(`⚠️ Ошибка автоответа в чате ${chatId}:`, errorMsg);
+
+      // Пишем в БД только если произошла реальная ошибка (например, бан бота)
+      if (db.saveErrorLog) {
+        await db.saveErrorLog(chatId, 'SEND_ERROR', errorMsg);
+      }
+    }
 
   } catch (error) {
     console.error('❌ Ошибка в бизнес-сообщении:', error);
