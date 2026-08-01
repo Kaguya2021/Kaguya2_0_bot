@@ -24,15 +24,23 @@ async function ensureDbInit() {
   try {
     const client = await pool.connect();
     
-    // Таблица настроек пользователей
+    // Таблица настроек пользователей (ДОБАВЛЕН reply_mode)
     await client.query(`
       CREATE TABLE IF NOT EXISTS user_settings (
         user_id VARCHAR(50) PRIMARY KEY,
         custom_reply TEXT,
         start_time VARCHAR(10),
-        end_time VARCHAR(10)
+        end_time VARCHAR(10),
+        reply_mode VARCHAR(20) DEFAULT 'always'
       );
     `);
+
+    // Безопасное добавление колонки, если таблица уже была создана ранее
+    try {
+      await client.query(`ALTER TABLE user_settings ADD COLUMN reply_mode VARCHAR(20) DEFAULT 'always';`);
+    } catch (e) {
+      // Игнорируем ошибку 42701 (duplicate_column), если колонка уже есть
+    }
 
     // Таблица зарегистрированных пользователей (для рассылок)
     await client.query(`
@@ -142,6 +150,28 @@ export const db = {
     return res.rows[0] || null;
   },
 
+  // --- НАСТРОЙКИ РЕЖИМА АВТООТВЕТА (НОВОЕ) ---
+  
+  setReplyMode: async (userId, mode) => {
+    await ensureDbInit();
+    const query = `
+      INSERT INTO user_settings (user_id, reply_mode)
+      VALUES ($1, $2)
+      ON CONFLICT (user_id) 
+      DO UPDATE SET reply_mode = EXCLUDED.reply_mode;
+    `;
+    return pool.query(query, [userId, mode]);
+  },
+
+  getReplyMode: async (userId) => {
+    await ensureDbInit();
+    const res = await pool.query('SELECT reply_mode FROM user_settings WHERE user_id = $1;', [userId]);
+    // Возвращаем 'always' по умолчанию, если ничего не найдено
+    return res.rows[0]?.reply_mode || 'always';
+  },
+
+  // --- РАБОТА С ПАУЗАМИ ---
+
   setPause: async (chatId, durationMs) => {
     await ensureDbInit();
     const pauseUntil = Date.now() + durationMs;
@@ -168,6 +198,7 @@ export const db = {
   },
 
   // --- ЭКОНОМНОЕ ЛОГИРОВАНИЕ (ТОЛЬКО ОШИБКИ И БАНЫ) ---
+  
   saveErrorLog: async (chatId, errorType, errorDetails) => {
     await ensureDbInit();
     const query = `
