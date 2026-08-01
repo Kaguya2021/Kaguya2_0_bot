@@ -51,7 +51,7 @@ async function ensureDbInit() {
       );
     `);
 
-    // Таблица логов сообщений
+    // Таблица логов сообщений и ошибок
     await client.query(`
       CREATE TABLE IF NOT EXISTS message_logs (
         id SERIAL PRIMARY KEY,
@@ -167,12 +167,14 @@ export const db = {
     return Number(res.rows[0].pause_until) > Date.now();
   },
 
-  saveMessage: async (chatId, role, content) => {
+  // --- ЭКОНОМНОЕ ЛОГИРОВАНИЕ (ТОЛЬКО ОШИБКИ И БАНЫ) ---
+  saveErrorLog: async (chatId, errorType, errorDetails) => {
     await ensureDbInit();
     const query = `
       INSERT INTO message_logs (chat_id, role, content)
       VALUES ($1, $2, $3);
     `;
-    return pool.query(query, [chatId, role, content]);
+    const message = `[${errorType}] ${errorDetails}`;
+    return pool.query(query, [chatId, 'error', message]).catch(console.error);
   }
 };
