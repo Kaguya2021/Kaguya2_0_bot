@@ -10,28 +10,24 @@ if (!process.env.BOT_TOKEN) {
 
 export const bot = new Bot(process.env.BOT_TOKEN);
 
-// Список администраторов бота
 const ADMIN_IDS = ['6511859639', '7470537453'];
 
-const PAUSE_DURATION = 10 * 60 * 1000;    // Пауза 10 минут при ответе владельца
-const COOLDOWN_DURATION = 15 * 60 * 1000; // ⏱️ Кулдаун 15 минут для клиентов
-const ANTI_SPAM_PAUSE = 3000;          // Анти-спам пауза 3 секунды
+const PAUSE_DURATION = 10 * 60 * 1000;    
+const COOLDOWN_DURATION = 15 * 60 * 1000; 
+const ANTI_SPAM_PAUSE = 3000;          
 
 const processedMessages = new Set();
 const localPauses = new Map();
 const replyCache = new Map();
 const stepState = new Map();
-const userStatuses = new Map();       // Статус вкл/выкл автоответа
-const userCooldownModes = new Map();  // Режим кулдауна для каждого пользователя
-
-// Хранилище бизнес-соединений: ключ — business_connection_id, значение — owner_id (строка)
+const userStatuses = new Map();       
+const userCooldownModes = new Map();  
 const connectionOwners = new Map();
 
 function isAdmin(userId) {
   return ADMIN_IDS.includes(String(userId));
 }
 
-// --- КРАСИВАЯ КЛАВИАТУРА МЕНЮ С КНОПКОЙ КУЛДАУНА ---
 async function getMainKeyboard(userId) {
   let isActive = userStatuses.get(userId);
   if (isActive === undefined) {
@@ -60,10 +56,6 @@ async function getMainKeyboard(userId) {
 
   return kb.resized();
 }
-
-// ==========================================
-// 1. СНАЧАЛА ВСЕ КОМАНДЫ
-// ==========================================
 
 bot.command('start', async (ctx) => {
   const userId = String(ctx.from.id);
@@ -322,10 +314,6 @@ bot.command('set', async (ctx) => {
   }
 });
 
-// ==========================================
-// 2. ОБРАБОТЧИКИ КНОПОК МЕНЮ (hears)
-// ==========================================
-
 bot.hears('🔕 Выключить автоответ', async (ctx) => {
   const userId = String(ctx.from.id);
   userStatuses.set(userId, false);
@@ -427,9 +415,6 @@ bot.hears('🔒 ADMINPPA', async (ctx) => {
   }
 });
 
-// ==========================================
-// 3. ПОШАГОВЫЙ ОБРАБОТЧИК СООБЩЕНИЙ
-// ==========================================
 bot.on('message', async (ctx, next) => {
   if (ctx.businessMessage) return next();
 
@@ -516,9 +501,6 @@ async function isWithinWorkingHours(ownerId) {
   }
 }
 
-// ==========================================
-// 4. ОБРАБОТЧИК БИЗНЕС-СООБЩЕНИЙ
-// ==========================================
 bot.on('business_message', async (ctx) => {
   try {
     if (globalThis.globalStop) return;
@@ -611,7 +593,7 @@ bot.on('business_message', async (ctx) => {
       if (db.saveErrorLog) await db.saveErrorLog(chatId, 'SEND_ERROR', sendError.message);
     }
   } catch (error) {
-    console.error('Ошибка бизнес-чата:', error);
+    
   }
 });
 
