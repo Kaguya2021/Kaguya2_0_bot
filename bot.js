@@ -62,10 +62,9 @@ async function getMainKeyboard(userId) {
 }
 
 // ==========================================
-// 1. СНАЧАЛА ВСЕ КОМАНДЫ (ИХ НЕЛЬЗЯ ПЕРЕХВАТЫВАТЬ ЧЕРЕЗ bot.on('message'))
+// 1. СНАЧАЛА ВСЕ КОМАНДЫ
 // ==========================================
 
-// --- КОМАНДА /start ---
 bot.command('start', async (ctx) => {
   const userId = String(ctx.from.id);
   
@@ -429,7 +428,7 @@ bot.hears('🔒 ADMINPPA', async (ctx) => {
 });
 
 // ==========================================
-// 3. ПОШАГОВЫЙ ОБРАБОТЧИК СООБЩЕНИЙ (state machine)
+// 3. ПОШАГОВЫЙ ОБРАБОТЧИК СООБЩЕНИЙ
 // ==========================================
 bot.on('message', async (ctx, next) => {
   if (ctx.businessMessage) return next();
@@ -506,4 +505,6 @@ async function isWithinWorkingHours(ownerId) {
     const [endH, endM] = schedule.end_time.split(':').map(Number);
     const startMinutes = startH * 60 + startM;
     const endMinutes = endH * 60 + endM;
-    
+
+    return startMinutes <= endMinutes 
+      ? (currentMinutes >= startMinutes && currentMi
