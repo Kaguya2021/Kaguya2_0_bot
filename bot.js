@@ -508,7 +508,7 @@ async function isWithinWorkingHours(ownerId) {
 
     return startMinutes <= endMinutes 
       ? (currentMinutes >= startMinutes && currentMi
-         : (currentMinutes >= startMinutes || currentMinutes <= endMinutes);
+      : (currentMinutes >= startMinutes || currentMinutes <= endMinutes);
   } catch (e) {
     return true;
   }
