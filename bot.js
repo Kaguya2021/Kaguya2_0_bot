@@ -61,6 +61,10 @@ async function getMainKeyboard(userId) {
   return kb.resized();
 }
 
+// ==========================================
+// 1. СНАЧАЛА ВСЕ КОМАНДЫ (ИХ НЕЛЬЗЯ ПЕРЕХВАТЫВАТЬ ЧЕРЕЗ bot.on('message'))
+// ==========================================
+
 // --- КОМАНДА /start ---
 bot.command('start', async (ctx) => {
   const userId = String(ctx.from.id);
@@ -90,7 +94,6 @@ bot.command('start', async (ctx) => {
   });
 });
 
-// --- ВЫВОД ВСЕХ КОМАНД АДМИНА ПО /admins И /adminppa ---
 async function showAdminPanel(ctx) {
   if (!isAdmin(ctx.from.id)) {
     return await ctx.reply(
@@ -123,109 +126,6 @@ async function showAdminPanel(ctx) {
 bot.command('admins', showAdminPanel);
 bot.command('adminppa', showAdminPanel);
 
-// --- ОБРАБОТКА НАЖАТИЙ НА КНОПКИ МЕНЮ ---
-bot.hears('🔕 Выключить автоответ', async (ctx) => {
-  const userId = String(ctx.from.id);
-  userStatuses.set(userId, false);
-  if (db.setUserActiveStatus) {
-    await db.setUserActiveStatus(userId, false).catch(() => {});
-  }
-  await ctx.reply('🔕 <b>Автоответчик выключен.</b> Бот больше не отвечает на сообщения.', {
-    parse_mode: 'HTML',
-    reply_markup: await getMainKeyboard(userId)
-  });
-});
-
-bot.hears('🔔 Включить автоответ', async (ctx) => {
-  const userId = String(ctx.from.id);
-  userStatuses.set(userId, true);
-  if (db.setUserActiveStatus) {
-    await db.setUserActiveStatus(userId, true).catch(() => {});
-  }
-  await ctx.reply('🔔 <b>Автоответчик включен!</b> Бот снова готов к работе.', {
-    parse_mode: 'HTML',
-    reply_markup: await getMainKeyboard(userId)
-  });
-});
-
-bot.hears(['⏱️ Режим: Кулдаун 15 мин (Вкл)', '⚡ Режим: Обычный (Без паузы)'], async (ctx) => {
-  const userId = String(ctx.from.id);
-  let currentMode = userCooldownModes.get(userId) || false;
-  let newMode = !currentMode;
-  userCooldownModes.set(userId, newMode);
-
-  const modeDesc = newMode 
-    ? '⏱️ <b>Кулдаун 15 минут</b> (Бот отвечает клиенту 1 раз, затем молчит 15 минут, не мешая переписке)' 
-    : '⚡ <b>Обычный режим</b> (Стандартное поведение)';
-
-  await ctx.reply(`✅ <b>Режим успешно изменен!</b>\n\nТекущий режим: ${modeDesc}`, {
-    parse_mode: 'HTML',
-    reply_markup: await getMainKeyboard(userId)
-  });
-});
-
-bot.hears('✍️ Установить текст', async (ctx) => {
-  stepState.set(String(ctx.from.id), { step: 'WAITING_TEXT_ONLY' });
-  await ctx.reply('✍️ <b>Напишите текст автоответа, который вы хотите установить:</b>', { parse_mode: 'HTML' });
-});
-
-bot.hears('🎤 Голосовой автоответ', async (ctx) => {
-  stepState.set(String(ctx.from.id), { step: 'WAITING_VOICE' });
-  await ctx.reply('🎤 <b>Отправьте или перешлите мне голосовое сообщение для автоответа:</b>', { parse_mode: 'HTML' });
-});
-
-bot.hears('🖼️ Комбо (Текст + Стикер)', async (ctx) => {
-  stepState.set(String(ctx.from.id), { step: 'WAITING_TEXT' });
-  await ctx.reply('✍️ <b>Шаг 1/2:</b> Напишите текст, который должен отправляться со стикером:', { parse_mode: 'HTML' });
-});
-
-bot.hears('🔍 Мой автоответ', async (ctx) => {
-  const userId = String(ctx.from.id);
-  const currentReply = replyCache.get(userId) || await db.getCustomReply(userId).catch(() => null);
-
-  if (!currentReply) {
-    return await ctx.reply('ℹ️ У вас установлен <b>дефолтный текст</b>:\n<i>Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓</i>', { parse_mode: 'HTML' });
-  }
-
-  if (currentReply.startsWith('combo:')) {
-    const parts = currentReply.replace('combo:', '').split('|||');
-    return await ctx.reply(`🔥 <b>Ваш автоответ (Комбо):</b>\n\n📝 Текст: <code>${parts[0]}</code>\n🖼️ Sticker ID: <code>${parts[1]}</code>`, { parse_mode: 'HTML' });
-  }
-
-  if (currentReply.startsWith('voice:')) {
-    const voiceId = currentReply.replace('voice:', '');
-    return await ctx.reply(`🎤 <b>Ваш автоответ (Голосовое):</b>\nID файла: <code>${voiceId}</code>`, { parse_mode: 'HTML' });
-  }
-
-  await ctx.reply(`✍️ <b>Ваш текущий автоответ:</b>\n\n${currentReply}`, { parse_mode: 'HTML' });
-});
-
-bot.hears('🗑️ Сбросить', async (ctx) => {
-  const userId = String(ctx.from.id);
-  replyCache.delete(userId);
-  await db.setCustomReply(userId, null).catch(console.error);
-  stepState.delete(userId);
-
-  await ctx.reply('🗑️ <b>Ваш автоответ успешно сброшен!</b> Теперь будет отправляться стандартный текст.', { parse_mode: 'HTML' });
-});
-
-bot.hears('⏰ Настроить время', async (ctx) => {
-  await ctx.reply(
-    '⏰ <b>Настройка рабочего времени:</b>\n\n' +
-    'Отправьте команду с желаемым временем.\n' +
-    '• Пример: <code>/time 05:00 20:00</code>\n' +
-    '• Отключить лимит: <code>/time off</code>',
-    { parse_mode: 'HTML' }
-  );
-});
-
-bot.hears('🔒 ADMINPPA', async (ctx) => {
-  if (isAdmin(ctx.from.id)) {
-    await showAdminPanel(ctx);
-  }
-});
-
-// --- АДМИН-КОМАНДЫ И УПРАВЛЕНИЕ ---
 bot.command('my', async (ctx) => {
   const userId = String(ctx.from.id);
   const currentReply = replyCache.get(userId) || await db.getCustomReply(userId).catch(() => null);
@@ -328,7 +228,6 @@ bot.command('mm', async (ctx) => {
   }
 });
 
-// --- КОМАНДА /info ---
 bot.command('info', async (ctx) => {
   const userId = String(ctx.from.id);
   const args = ctx.message.text.trim().split(/\s+/);
@@ -424,7 +323,114 @@ bot.command('set', async (ctx) => {
   }
 });
 
-// --- ОБРАБОТЧИК ВВОДА И ПОШАГОВЫХ ДЕЙСТВИЙ ---
+// ==========================================
+// 2. ОБРАБОТЧИКИ КНОПОК МЕНЮ (hears)
+// ==========================================
+
+bot.hears('🔕 Выключить автоответ', async (ctx) => {
+  const userId = String(ctx.from.id);
+  userStatuses.set(userId, false);
+  if (db.setUserActiveStatus) {
+    await db.setUserActiveStatus(userId, false).catch(() => {});
+  }
+  await ctx.reply('🔕 <b>Автоответчик выключен.</b> Бот больше не отвечает на сообщения.', {
+    parse_mode: 'HTML',
+    reply_markup: await getMainKeyboard(userId)
+  });
+});
+
+bot.hears('🔔 Включить автоответ', async (ctx) => {
+  const userId = String(ctx.from.id);
+  userStatuses.set(userId, true);
+  if (db.setUserActiveStatus) {
+    await db.setUserActiveStatus(userId, true).catch(() => {});
+  }
+  await ctx.reply('🔔 <b>Автоответчик включен!</b> Бот снова готов к работе.', {
+    parse_mode: 'HTML',
+    reply_markup: await getMainKeyboard(userId)
+  });
+});
+
+bot.hears(['⏱️ Режим: Кулдаун 15 мин (Вкл)', '⚡ Режим: Обычный (Без паузы)'], async (ctx) => {
+  const userId = String(ctx.from.id);
+  let currentMode = userCooldownModes.get(userId) || false;
+  let newMode = !currentMode;
+  userCooldownModes.set(userId, newMode);
+
+  const modeDesc = newMode 
+    ? '⏱️ <b>Кулдаун 15 минут</b> (Бот отвечает клиенту 1 раз, затем молчит 15 минут, не мешая переписке)' 
+    : '⚡ <b>Обычный режим</b> (Стандартное поведение)';
+
+  await ctx.reply(`✅ <b>Режим успешно изменен!</b>\n\nТекущий режим: ${modeDesc}`, {
+    parse_mode: 'HTML',
+    reply_markup: await getMainKeyboard(userId)
+  });
+});
+
+bot.hears('✍️ Установить текст', async (ctx) => {
+  stepState.set(String(ctx.from.id), { step: 'WAITING_TEXT_ONLY' });
+  await ctx.reply('✍️ <b>Напишите текст автоответа, который вы хотите установить:</b>', { parse_mode: 'HTML' });
+});
+
+bot.hears('🎤 Голосовой автоответ', async (ctx) => {
+  stepState.set(String(ctx.from.id), { step: 'WAITING_VOICE' });
+  await ctx.reply('🎤 <b>Отправьте или перешлите мне голосовое сообщение для автоответа:</b>', { parse_mode: 'HTML' });
+});
+
+bot.hears('🖼️ Комбо (Текст + Стикер)', async (ctx) => {
+  stepState.set(String(ctx.from.id), { step: 'WAITING_TEXT' });
+  await ctx.reply('✍️ <b>Шаг 1/2:</b> Напишите текст, который должен отправляться со стикером:', { parse_mode: 'HTML' });
+});
+
+bot.hears('🔍 Мой автоответ', async (ctx) => {
+  const userId = String(ctx.from.id);
+  const currentReply = replyCache.get(userId) || await db.getCustomReply(userId).catch(() => null);
+
+  if (!currentReply) {
+    return await ctx.reply('ℹ️ У вас установлен <b>дефолтный текст</b>:\n<i>Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓</i>', { parse_mode: 'HTML' });
+  }
+
+  if (currentReply.startsWith('combo:')) {
+    const parts = currentReply.replace('combo:', '').split('|||');
+    return await ctx.reply(`🔥 <b>Ваш автоответ (Комбо):</b>\n\n📝 Текст: <code>${parts[0]}</code>\n🖼️ Sticker ID: <code>${parts[1]}</code>`, { parse_mode: 'HTML' });
+  }
+
+  if (currentReply.startsWith('voice:')) {
+    const voiceId = currentReply.replace('voice:', '');
+    return await ctx.reply(`🎤 <b>Ваш автоответ (Голосовое):</b>\nID файла: <code>${voiceId}</code>`, { parse_mode: 'HTML' });
+  }
+
+  await ctx.reply(`✍️ <b>Ваш текущий автоответ:</b>\n\n${currentReply}`, { parse_mode: 'HTML' });
+});
+
+bot.hears('🗑️ Сбросить', async (ctx) => {
+  const userId = String(ctx.from.id);
+  replyCache.delete(userId);
+  await db.setCustomReply(userId, null).catch(console.error);
+  stepState.delete(userId);
+
+  await ctx.reply('🗑️ <b>Ваш автоответ успешно сброшен!</b> Теперь будет отправляться стандартный текст.', { parse_mode: 'HTML' });
+});
+
+bot.hears('⏰ Настроить время', async (ctx) => {
+  await ctx.reply(
+    '⏰ <b>Настройка рабочего времени:</b>\n\n' +
+    'Отправьте команду с желаемым временем.\n' +
+    '• Пример: <code>/time 05:00 20:00</code>\n' +
+    '• Отключить лимит: <code>/time off</code>',
+    { parse_mode: 'HTML' }
+  );
+});
+
+bot.hears('🔒 ADMINPPA', async (ctx) => {
+  if (isAdmin(ctx.from.id)) {
+    await showAdminPanel(ctx);
+  }
+});
+
+// ==========================================
+// 3. ПОШАГОВЫЙ ОБРАБОТЧИК СООБЩЕНИЙ (state machine)
+// ==========================================
 bot.on('message', async (ctx, next) => {
   if (ctx.businessMessage) return next();
 
@@ -500,13 +506,4 @@ async function isWithinWorkingHours(ownerId) {
     const [endH, endM] = schedule.end_time.split(':').map(Number);
     const startMinutes = startH * 60 + startM;
     const endMinutes = endH * 60 + endM;
-
-    return startMinutes <= endMinutes 
-      ? (currentMinutes >= startMinutes && currentMinutes <= endMinutes)
-      : (currentMinutes >= startMinutes || currentMinutes <= endMinutes);
-  } catch (e) {
-    return true;
-  }
-}
-
-// 
+    
