@@ -506,13 +506,16 @@ async function isWithinWorkingHours(ownerId) {
     const startMinutes = startH * 60 + startM;
     const endMinutes = endH * 60 + endM;
 
-    return startMinutes <= endMinutes 
-      ? (currentMinutes >= startMinutes && currentMi
-      : (currentMinutes >= startMinutes || currentMinutes <= endMinutes);
+        if (startMinutes <= endMinutes) {
+      return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+    } else {
+      return currentMinutes >= startMinutes || currentMinutes <= endMinutes;
+    }
   } catch (e) {
     return true;
   }
 }
+
 
 // ==========================================
 // 4. ОБРАБОТЧИК БИЗНЕС-СООБЩЕНИЙ (С ДИАГНОСТИКОЙ)
