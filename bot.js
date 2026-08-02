@@ -506,7 +506,7 @@ async function isWithinWorkingHours(ownerId) {
     const startMinutes = startH * 60 + startM;
     const endMinutes = endH * 60 + endM;
 
-        if (startMinutes <= endMinutes) {
+    if (startMinutes <= endMinutes) {
       return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
     } else {
       return currentMinutes >= startMinutes || currentMinutes <= endMinutes;
@@ -517,12 +517,9 @@ async function isWithinWorkingHours(ownerId) {
 }
 
 // ==========================================
-// 4. ОБРАБОТЧИК БИЗНЕС-СООБЩЕНИЙ (С ДИАГНОСТИКОЙ)
+// 4. ОБРАБОТЧИК БИЗНЕС-СООБЩЕНИЙ
 // ==========================================
 bot.on('business_message', async (ctx) => {
-  // ДИАГНОСТИЧЕСКИЙ ЛОГ: если это сообщение появится в консоли, значит Telegram доставляет сообщения боту
-//  console.log('🔥 Сработало событие business_message!', ctx.businessMessage?.text || '[не текст]');
-
   try {
     if (globalThis.globalStop) return;
     const businessMessage = ctx.businessMessage;
