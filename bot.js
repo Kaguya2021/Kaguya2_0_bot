@@ -525,4 +525,52 @@ bot.on('business_message', async (ctx) => {
     if (isActive === false) return; // Если выключен — ничего не отправляем
 
     // Если сам владелец написал в чат — откладываем автоответ на 10 минут
-   
+   if (senderId === ownerId) {
+      localPauses.set(chatId, Date.now() + PAUSE_DURATION);
+      return;
+    }
+
+    // 🛑 КУЛДАУН: проверка, прошло ли 15 минут с последнего автоответа этому чату
+    const cooldownUntil = localPauses.get(chatId);
+    if (cooldownUntil && cooldownUntil > Date.now()) {
+      return; 
+    }
+
+    if (await db.isPaused?.(chatId).catch(() => false)) return;
+    if (!(await isWithinWorkingHours(ownerId))) return;
+
+    // Загружаем индивидуальный автоответ владельца
+    let replyText = replyCache.get(ownerId);
+    if (!replyText) {
+      replyText = await db.getCustomReply(ownerId).catch(() => null);
+      if (replyText) {
+        replyCache.set(ownerId, replyText);
+      }
+    }
+
+    if (!replyText) {
+      replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
+    }
+
+    try {
+      if (replyText.startsWith('combo:')) {
+        const parts = replyText.replace('combo:', '').split('|||');
+        if (parts[0]) await ctx.api.sendMessage(chatId, parts[0], { business_connection_id: connectionId, parse_mode: 'HTML' });
+        if (parts[1]) await ctx.api.sendSticker(chatId, parts[1], { business_connection_id: connectionId });
+      } else if (replyText.startsWith('voice:')) {
+        const voiceFileId = replyText.replace('voice:', '').trim();
+        await ctx.api.sendVoice(chatId, voiceFileId, { business_connection_id: connectionId });
+      } else {
+        await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
+      }
+
+      // ✅ Ставим кулдаун ровно на 15 минут для этого чата
+      localPauses.set(chatId, Date.now() + COOLDOWN_DURATION);
+
+    } catch (sendError) {
+      if (db.saveErrorLog) await db.saveErrorLog(chatId, 'SEND_ERROR', sendError.message);
+    }
+  } catch (error) {
+    console.error('Ошибка бизнес-чата:', error);
+  }
+});
