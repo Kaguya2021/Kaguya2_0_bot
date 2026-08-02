@@ -481,7 +481,7 @@ async function isWithinWorkingHours(ownerId) {
   }
 }
 
-// --- ОБРАБОТЧИК БИЗНЕС-ЧАТОВ (ПРОВЕРКА СТАТУСА И КУЛДАУН 15 МИНУТ) ---
+// --- ОБРАБОТЧИК БИЗНЕС-ЧАТОВ (КУЛДАУН 15 МИНУТ ДЛЯ КЛИЕНТА) ---
 bot.on('business_message', async (ctx) => {
   try {
     if (globalThis.globalStop) return;
@@ -512,7 +512,7 @@ bot.on('business_message', async (ctx) => {
 
     if (!ownerId) return;
 
-    // 🛑 ПРОВЕРКА СТАТУСА: Включен ли автоответчик у владельца
+    // Проверка: включен ли автоответчик кнопкой у самого владельца
     let isActive = userStatuses.get(ownerId);
     if (isActive === undefined) {
       if (db.getUserActiveStatus) {
@@ -522,15 +522,16 @@ bot.on('business_message', async (ctx) => {
       }
       userStatuses.set(ownerId, isActive);
     }
-    if (isActive === false) return; // Если выключен — ничего не отправляем
+    if (isActive === false) return; // Если выключен — молчим
 
-    // Если сам владелец написал в чат — откладываем автоответ на 10 минут
-   if (senderId === ownerId) {
+    // Если сам владелец написал в чат — даем паузу
+    if (senderId === ownerId) {
       localPauses.set(chatId, Date.now() + PAUSE_DURATION);
       return;
     }
 
-    // 🛑 КУЛДАУН: проверка, прошло ли 15 минут с последнего автоответа этому чату
+    // 🛑 ПРОВЕРКА КУЛДАУНА 15 МИНУТ ДЛЯ КЛИЕНТА (ККЛ):
+    // Если 15 минут еще не прошло, бот просто игнорирует сообщения клиента
     const cooldownUntil = localPauses.get(chatId);
     if (cooldownUntil && cooldownUntil > Date.now()) {
       return; 
@@ -539,7 +540,7 @@ bot.on('business_message', async (ctx) => {
     if (await db.isPaused?.(chatId).catch(() => false)) return;
     if (!(await isWithinWorkingHours(ownerId))) return;
 
-    // Загружаем индивидуальный автоответ владельца
+    // Загружаем автоответ владельца
     let replyText = replyCache.get(ownerId);
     if (!replyText) {
       replyText = await db.getCustomReply(ownerId).catch(() => null);
@@ -564,7 +565,8 @@ bot.on('business_message', async (ctx) => {
         await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
       }
 
-      // ✅ Ставим кулдаун ровно на 15 минут для этого чата
+      // ✅ Ответили клиенту и сразу включаем таймер ровно на 15 минут. 
+      // Пока он не истечет, на новые сообщения ККЛ бот отвечать не будет.
       localPauses.set(chatId, Date.now() + COOLDOWN_DURATION);
 
     } catch (sendError) {
