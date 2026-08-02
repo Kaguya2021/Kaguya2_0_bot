@@ -12,15 +12,15 @@ export const bot = new Bot(process.env.BOT_TOKEN);
 
 const ADMIN_IDS = ['6511859639', '7470537453'];
 
-const PAUSE_DURATION = 10 * 60 * 1000;    // Пауза 10 минут, если владелец написал сам
-const COOLDOWN_DURATION = 15 * 60 * 1000; // Кулдаун 15 минут для клиентов
+const PAUSE_DURATION = 10 * 60 * 1000;    
+const COOLDOWN_DURATION = 15 * 60 * 1000; // ⏱️ Изменили таймер кулдауна на 15 минут
 
 const processedMessages = new Set();
 const localPauses = new Map();
 const replyCache = new Map();
 const stepState = new Map();
-const userStatuses = new Map();       // Хранит статус вкл/выкл автоответа
-const userCooldownModes = new Map();  // Хранит личный режим кулдауна (1 раз + 15 минут) для каждого пользователя
+const userStatuses = new Map();       
+const userCooldownModes = new Map();  
 
 const connectionOwners = new Map();
 
@@ -28,7 +28,6 @@ function isAdmin(userId) {
   return ADMIN_IDS.includes(String(userId));
 }
 
-// --- КЛАВИАТУРА С КНОПКОЙ ВКЛ/ВЫКЛ И КНОПКОЙ ЛИЧНОГО РЕЖИМА ---
 async function getMainKeyboard(userId) {
   let isActive = userStatuses.get(userId);
   if (isActive === undefined) {
@@ -40,14 +39,13 @@ async function getMainKeyboard(userId) {
     userStatuses.set(userId, isActive);
   }
 
-  // Проверяем личный режим кулдауна пользователя
   let isCooldownMode = userCooldownModes.get(userId) || false;
   const modeButtonText = isCooldownMode ? '⏱️ Режим: Кулдаун 15 мин (Вкл)' : '⚡ Режим: Обычный (Без паузы)';
   const statusButtonText = isActive ? '🔕 Выключить автоответ' : '🔔 Включить автоответ';
 
   const kb = new Keyboard()
     .text(statusButtonText).row()
-    .text(modeButtonText).row() // <-- Личная кнопка переключения режима
+    .text(modeButtonText).row() 
     .text('✍️ Установить текст').text('🎤 Голосовой автоответ').row()
     .text('🖼️ Комбо (Текст + Стикер)').text('🔍 Мой автоответ').row()
     .text('⏰ Настроить время').text('🗑️ Сбросить').row();
@@ -59,7 +57,6 @@ async function getMainKeyboard(userId) {
   return kb.resized();
 }
 
-// --- КОМАНДА /start ---
 bot.command('start', async (ctx) => {
   const userId = String(ctx.from.id);
   
@@ -87,7 +84,6 @@ bot.command('start', async (ctx) => {
   });
 });
 
-// --- ОБРАБОТКА КНОПОК ВКЛ / ВЫКЛ ---
 bot.hears('🔕 Выключить автоответ', async (ctx) => {
   const userId = String(ctx.from.id);
   userStatuses.set(userId, false);
@@ -114,11 +110,9 @@ bot.hears('🔔 Включить автоответ', async (ctx) => {
   });
 });
 
-// --- ОБРАБОТКА НАЖАТИЯ НА КНОПКУ ПЕРЕКЛЮЧЕНИЯ РЕЖИМА ---
 bot.hears(['⏱️ Режим: Кулдаун 15 мин (Вкл)', '⚡ Режим: Обычный (Без паузы)'], async (ctx) => {
   const userId = String(ctx.from.id);
   
-  // Переключаем режим лично для того, кто нажал
   let currentMode = userCooldownModes.get(userId) || false;
   let newMode = !currentMode;
   userCooldownModes.set(userId, newMode);
@@ -133,7 +127,6 @@ bot.hears(['⏱️ Режим: Кулдаун 15 мин (Вкл)', '⚡ Режи
   });
 });
 
-// --- ОСТАЛЬНЫЕ КНОПКИ МЕНЮ ---
 bot.hears('✍️ Установить текст', async (ctx) => {
   stepState.set(String(ctx.from.id), { step: 'WAITING_TEXT_ONLY' });
   await ctx.reply('✍️ <b>Напишите текст автоответа:</b>', { parse_mode: 'HTML' });
@@ -224,7 +217,6 @@ async function isWithinWorkingHours(ownerId) {
   }
 }
 
-// --- ОБРАБОТЧИК БИЗНЕС-ЧАТОВ С УЧЕТОМ ЛИЧНОГО РЕЖИМА И КУЛДАУНА ---
 bot.on('business_message', async (ctx) => {
   try {
     if (globalThis.globalStop) return;
@@ -241,7 +233,6 @@ bot.on('business_message', async (ctx) => {
     processedMessages.add(uniqueKey);
     setTimeout(() => processedMessages.delete(uniqueKey), 30 * 1000);
 
-    // Определяем владельца бизнес-аккаунта
     let ownerId = connectionOwners.get(connectionId);
     if (!ownerId) {
       try {
@@ -255,7 +246,6 @@ bot.on('business_message', async (ctx) => {
 
     if (!ownerId) return;
 
-    // 1. Проверяем, включен ли автоответчик у этого владельца кнопкой
     let isActive = userStatuses.get(ownerId);
     if (isActive === undefined) {
       if (db.getUserActiveStatus) {
@@ -265,28 +255,24 @@ bot.on('business_message', async (ctx) => {
       }
       userStatuses.set(ownerId, isActive);
     }
-    if (isActive === false) return; // Если выключен — бот молчит
+    if (isActive === false) return; 
 
-    // Если сам владелец написал в чат — пауза 10 минут
     if (senderId === ownerId) {
       localPauses.set(chatId, Date.now() + PAUSE_DURATION);
       return;
     }
 
-    // 2. ПРОВЕРКА ЛИЧНОГО РЕЖИМА ВЛАДЕЛЬЦА:
-    // Если у этого владельца включен режим кулдауна кнопкой, проверяем 15 минут паузы для клиента
     const isOwnerInCooldownMode = userCooldownModes.get(ownerId) || false;
     if (isOwnerInCooldownMode) {
       const cooldownUntil = localPauses.get(chatId);
       if (cooldownUntil && cooldownUntil > Date.now()) {
-        return; // Если 15 минут еще не прошли — молчим
+        return; 
       }
     }
 
     if (await db.isPaused?.(chatId).catch(() => false)) return;
     if (!(await isWithinWorkingHours(ownerId))) return;
 
-    // Загружаем текст автоответа
     let replyText = replyCache.get(ownerId);
     if (!replyText) {
       replyText = await db.getCustomReply(ownerId).catch(() => null);
@@ -311,7 +297,6 @@ bot.on('business_message', async (ctx) => {
         await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
       }
 
-      // 3. Если у владельца включен режим кулдауна, ставим таймер на 15 минут для этого чата
       if (isOwnerInCooldownMode) {
         localPauses.set(chatId, Date.now() + COOLDOWN_DURATION);
       }
