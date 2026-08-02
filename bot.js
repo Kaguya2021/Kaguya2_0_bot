@@ -30,7 +30,7 @@ function isAdmin(userId) {
   return ADMIN_IDS.includes(String(userId));
 }
 
-// --- ФУНКЦИЯ СОЗДАНИЯ КРАСИВОГО МЕНЮ (КАК НА КАРТИНКЕ) ---
+// --- ФУНКЦИЯ СОЗДАНИЯ КРАСИВОГО МЕНЮ ---
 async function getMainMenuKeyboard(userId) {
   let currentMode = replyModeCache.get(userId);
   if (!currentMode && db.getReplyMode) {
@@ -46,6 +46,26 @@ async function getMainMenuKeyboard(userId) {
     .text('⏰ График работы', 'btn_time')
     .text(modeText, 'btn_toggle_mode').row()
     .url('📢 Официальный канал', 'https://t.me/kaguya_2_0_bots');
+}
+
+// --- ВЫНЕСЕННАЯ ЛОГИКА ПРОФИЛЯ ---
+// Теперь её можно безопасно вызывать из любого места (и из кнопок, и из /my)
+async function showUserProfile(ctx, userId) {
+  const userInfo = (await db.getUserInfo?.(userId)) || {};
+  const customReply = (await db.getCustomReply?.(userId)) || 'Дефолтный текст';
+  const schedule = (await db.getSchedule?.(userId)) || null;
+  let currentMode = replyModeCache.get(userId) || 'always';
+
+  const dateStr = userInfo.created_at ? new Date(userInfo.created_at).toLocaleDateString('ru-RU') : 'Неизвестно';
+  const modeStr = currentMode === 'once' ? '1 раз (затем пауза 15 мин)' : 'На каждое сообщение';
+
+  let profileText = `👤 <b>Ваш профиль:</b>\n\n`;
+  profileText += `📅 <b>Подключен:</b> ${dateStr}\n`;
+  profileText += `⏰ <b>График работы:</b> ${schedule?.start_time ? `${schedule.start_time} - ${schedule.end_time}` : 'Круглосуточно'}\n`;
+  profileText += `🔄 <b>Частота ответов:</b> ${modeStr}\n\n`;
+  profileText += `💬 <b>Установленный автоответ:</b>\n<code>${customReply}</code>`;
+
+  await ctx.reply(profileText, { parse_mode: 'HTML' });
 }
 
 // --- КОМАНДА /start ---
@@ -72,23 +92,8 @@ bot.on('callback_query:data', async (ctx) => {
   const userId = String(ctx.from.id);
 
   if (data === 'btn_profile') {
-    const userInfo = (await db.getUserInfo?.(userId)) || {};
-    const customReply = (await db.getCustomReply?.(userId)) || 'Дефолтный текст';
-    const schedule = (await db.getSchedule?.(userId)) || null;
-    let currentMode = replyModeCache.get(userId) || 'always';
-
-    // Форматируем дату регистрации
-    const dateStr = userInfo.created_at ? new Date(userInfo.created_at).toLocaleDateString('ru-RU') : 'Неизвестно';
-    const modeStr = currentMode === 'once' ? '1 раз (затем пауза 15 мин)' : 'На каждое сообщение';
-
-    let profileText = `👤 <b>Ваш профиль:</b>\n\n`;
-    profileText += `📅 <b>Подключен:</b> ${dateStr}\n`;
-    profileText += `⏰ <b>График работы:</b> ${schedule?.start_time ? `${schedule.start_time} - ${schedule.end_time}` : 'Круглосуточно'}\n`;
-    profileText += `🔄 <b>Частота ответов:</b> ${modeStr}\n\n`;
-    profileText += `💬 <b>Установленный автоответ:</b>\n<code>${customReply}</code>`;
-
     await ctx.answerCallbackQuery();
-    await ctx.reply(profileText, { parse_mode: 'HTML' });
+    await showUserProfile(ctx, userId);
   }
 
   if (data === 'btn_reply') {
@@ -142,11 +147,10 @@ bot.command('admins', async (ctx) => {
   );
 });
 
-// --- СТАРЫЕ КОМАНДЫ (ОСТАВЛЕНЫ ДЛЯ СОВМЕСТИМОСТИ) ---
+// --- ИСПРАВЛЕННАЯ КОМАНДА /my ---
 bot.command('my', async (ctx) => {
-  // Вызываем кнопку профиля программно
-  ctx.callbackQuery = { data: 'btn_profile' };
-  bot.handleUpdate(ctx.update);
+  const userId = String(ctx.from.id);
+  await showUserProfile(ctx, userId);
 });
 
 bot.command(['reset', 'clear'], async (ctx) => {
@@ -374,11 +378,10 @@ bot.on('business_message', async (ctx) => {
        } else if (!currentMode) currentMode = 'always';
     }
 
-    // ЛОГИКА ПАУЗЫ (1 РАЗ или ВСЕГДА)
     if (currentMode === 'once') {
-       localPauses.set(chatId, Date.now() + ONCE_MODE_PAUSE); // Пауза ровно на 15 минут
+       localPauses.set(chatId, Date.now() + ONCE_MODE_PAUSE); 
     } else {
-       localPauses.set(chatId, Date.now() + ANTI_SPAM_PAUSE); // Стандартные 3 секунды
+       localPauses.set(chatId, Date.now() + ANTI_SPAM_PAUSE); 
     }
 
     let replyText = null;
@@ -408,4 +411,12 @@ bot.on('business_message', async (ctx) => {
   } catch (error) {
     console.error('❌ Ошибка в бизнес-сообщении:', error);
   }
+});
+
+// --- ГЛОБАЛЬНЫЙ ПЕРЕХВАТЧИК ОШИБОК ---
+// Не даст боту упасть (и отключиться в Render) при непредвиденных ошибках
+bot.catch((err) => {
+  const ctx = err.ctx;
+  console.error(`[Global Error] Ошибка при обработке апдейта ${ctx.update.update_id}:`);
+  console.error(err.error);
 });
