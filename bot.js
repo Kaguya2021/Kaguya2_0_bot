@@ -20,6 +20,7 @@ const processedMessages = new Set();
 const localPauses = new Map();
 const replyCache = new Map();
 const stepState = new Map();
+const userStatuses = new Map(); // Быстрое хранение статуса вкл/выкл в памяти
 
 // Хранилище бизнес-соединений: ключ — business_connection_id, значение — owner_id (строка)
 const connectionOwners = new Map();
@@ -28,9 +29,23 @@ function isAdmin(userId) {
   return ADMIN_IDS.includes(String(userId));
 }
 
-// --- КРАСИВАЯ КЛАВИАТУРА МЕНЮ ---
-function getMainKeyboard(userId) {
+// --- ДИНАМИЧЕСКАЯ КЛАВИАТУРА МЕНЮ С КНОПКОЙ ВКЛ/ВЫКЛ ---
+async function getMainKeyboard(userId) {
+  // Проверяем статус (по умолчанию включен — true)
+  let isActive = userStatuses.get(userId);
+  if (isActive === undefined) {
+    if (db.getUserActiveStatus) {
+      isActive = await db.getUserActiveStatus(userId).catch(() => true);
+    } else {
+      isActive = true;
+    }
+    userStatuses.set(userId, isActive);
+  }
+
+  const statusButtonText = isActive ? '🔕 Выключить автоответ' : '🔔 Включить автоответ';
+
   const kb = new Keyboard()
+    .text(statusButtonText).row()
     .text('✍️ Установить текст').text('🎤 Голосовой автоответ').row()
     .text('🖼️ Комбо (Текст + Стикер)').text('🔍 Мой автоответ').row()
     .text('⏰ Настроить время').text('🗑️ Сбросить').row();
@@ -53,7 +68,7 @@ bot.command('start', async (ctx) => {
   const welcomeText = 
     '👋 <b>Привет! Я бот Кагуя 2.0.</b>\n\n' +
     '⚙️ Я персональный автоответчик для вашего Telegram Business!\n' +
-    'Вы можете легко настроить свой собственный текст, голосовое или комбо-сообщение.\n\n' +
+    'Вы можете включать/выключать его кнопкой в меню и настраивать свой текст.\n\n' +
     '📢 <b>Наш официальный канал:</b> <a href="https://t.me/kaguya_2_0_bots">Kaguya 2.0 Channel</a>\n\n' +
     '👇 <b>Используйте меню ниже для настройки:</b>';
 
@@ -67,7 +82,7 @@ bot.command('start', async (ctx) => {
   });
 
   await ctx.reply('🚀 <b>Главное меню автоответчика:</b>', {
-    reply_markup: getMainKeyboard(userId)
+    reply_markup: await getMainKeyboard(userId)
   });
 });
 
@@ -104,7 +119,34 @@ async function showAdminPanel(ctx) {
 bot.command('admins', showAdminPanel);
 bot.command('adminppa', showAdminPanel);
 
-// --- ОБРАБОТКА НАЖАТИЙ НА КНОПКИ МЕНЮ ---
+// --- ОБРАБОТКА КНОПОК ВКЛЮЧЕНИЯ / ВЫКЛЮЧЕНИЯ АВТООТВЕТЧИКА ---
+bot.hears('🔕 Выключить автоответ', async (ctx) => {
+  const userId = String(ctx.from.id);
+  userStatuses.set(userId, false);
+  if (db.setUserActiveStatus) {
+    await db.setUserActiveStatus(userId, false).catch(() => {});
+  }
+
+  await ctx.reply('🔕 <b>Автоответчик выключен.</b> Больше он не будет отвечать на сообщения в вашем бизнесе, пока вы его снова не включите.', {
+    parse_mode: 'HTML',
+    reply_markup: await getMainKeyboard(userId)
+  });
+});
+
+bot.hears('🔔 Включить автоответ', async (ctx) => {
+  const userId = String(ctx.from.id);
+  userStatuses.set(userId, true);
+  if (db.setUserActiveStatus) {
+    await db.setUserActiveStatus(userId, true).catch(() => {});
+  }
+
+  await ctx.reply('🔔 <b>Автоответчик снова включен!</b> Теперь он работает в штатном режиме.', {
+    parse_mode: 'HTML',
+    reply_markup: await getMainKeyboard(userId)
+  });
+});
+
+// --- ОБРАБОТКА НАЖАТИЙ НА ОСТАЛЬНЫЕ КНОПКИ МЕНЮ ---
 bot.hears('✍️ Установить текст', async (ctx) => {
   stepState.set(String(ctx.from.id), { step: 'WAITING_TEXT_ONLY' });
   await ctx.reply('✍️ <b>Напишите текст автоответа, который вы хотите установить:</b>', { parse_mode: 'HTML' });
@@ -269,7 +311,6 @@ bot.command('mm', async (ctx) => {
   }
 });
 
-// --- ИСПРАВЛЕННАЯ КОМАНДА /info ---
 bot.command('info', async (ctx) => {
   if (!isAdmin(ctx.from.id)) return;
   const args = ctx.message.text.trim().split(/\s+/);
@@ -440,7 +481,7 @@ async function isWithinWorkingHours(ownerId) {
   }
 }
 
-// --- ОБРАБОТЧИК БИЗНЕС-ЧАТОВ С КУЛДАУНОМ 15 МИНУТ ---
+// --- ОБРАБОТЧИК БИЗНЕС-ЧАТОВ (ПРОВЕРКА СТАТУСА И КУЛДАУН 15 МИНУТ) ---
 bot.on('business_message', async (ctx) => {
   try {
     if (globalThis.globalStop) return;
@@ -471,54 +512,17 @@ bot.on('business_message', async (ctx) => {
 
     if (!ownerId) return;
 
-    // Если сам владелец написал в чат — откладываем автоответ на 10 минут
-    if (senderId === ownerId) {
-      localPauses.set(chatId, Date.now() + PAUSE_DURATION);
-      return;
-    }
-
-    // 🛑 КУЛДАУН: проверка, прошло ли 15 минут с последнего автоответа этому чату
-    const cooldownUntil = localPauses.get(chatId);
-    if (cooldownUntil && cooldownUntil > Date.now()) {
-      return; 
-    }
-
-    if (await db.isPaused?.(chatId).catch(() => false)) return;
-    if (!(await isWithinWorkingHours(ownerId))) return;
-
-    // Загружаем индивидуальный автоответ владельца этого аккаунта
-    let replyText = replyCache.get(ownerId);
-    if (!replyText) {
-      replyText = await db.getCustomReply(ownerId).catch(() => null);
-      if (replyText) {
-        replyCache.set(ownerId, replyText);
-      }
-    }
-
-    if (!replyText) {
-      replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
-    }
-
-    try {
-      if (replyText.startsWith('combo:')) {
-        const parts = replyText.replace('combo:', '').split('|||');
-        if (parts[0]) await ctx.api.sendMessage(chatId, parts[0], { business_connection_id: connectionId, parse_mode: 'HTML' });
-        if (parts[1]) await ctx.api.sendSticker(chatId, parts[1], { business_connection_id: connectionId });
-      } else if (replyText.startsWith('voice:')) {
-        const voiceFileId = replyText.replace('voice:', '').trim();
-        await ctx.api.sendVoice(chatId, voiceFileId, { business_connection_id: connectionId });
+    // 🛑 ПРОВЕРКА СТАТУСА: Включен ли автоответчик у владельца
+    let isActive = userStatuses.get(ownerId);
+    if (isActive === undefined) {
+      if (db.getUserActiveStatus) {
+        isActive = await db.getUserActiveStatus(ownerId).catch(() => true);
       } else {
-        await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
+        isActive = true;
       }
-
-      // ✅ Успешно ответили — ставим кулдаун ровно на 15 минут
-      localPauses.set(chatId, Date.now() + COOLDOWN_DURATION);
-
-    } catch (sendError) {
-      if (db.saveErrorLog) await db.saveErrorLog(chatId, 'SEND_ERROR', sendError.message);
+      userStatuses.set(ownerId, isActive);
     }
-  } catch (error) {
-    console.error('Ошибка бизнес-чата:', error);
-  }
-});
-          
+    if (isActive === false) return; // Если выключен — ничего не отправляем
+
+    // Если сам владелец написал в чат — откладываем автоответ на 10 минут
+   
