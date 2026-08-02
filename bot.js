@@ -13,7 +13,7 @@ export const bot = new Bot(process.env.BOT_TOKEN);
 const ADMIN_IDS = ['6511859639', '7470537453'];
 
 const PAUSE_DURATION = 10 * 60 * 1000;    
-const COOLDOWN_DURATION = 15 * 60 * 1000; // ⏱️ Изменили таймер кулдауна на 15 минут
+const COOLDOWN_DURATION = 15 * 60 * 1000; // ⏱️ Кулдаун 15 минут (бот отвечает 1 раз и молчит 15 минут)
 
 const processedMessages = new Set();
 const localPauses = new Map();
@@ -48,7 +48,7 @@ async function getMainKeyboard(userId) {
     .text(modeButtonText).row() 
     .text('✍️ Установить текст').text('🎤 Голосовой автоответ').row()
     .text('🖼️ Комбо (Текст + Стикер)').text('🔍 Мой автоответ').row()
-    .text('⏰ Настроить время').text('🗑️ Сбросить').row();
+    .text('ℹ️ Инфо').text('🗑️ Сбросить').row(); // 👈 Вернули кнопку Инфо в меню
 
   if (isAdmin(userId)) {
     kb.text('🔒 ADMINPPA').row();
@@ -82,6 +82,28 @@ bot.command('start', async (ctx) => {
   await ctx.reply('🚀 <b>Главное меню:</b>', {
     reply_markup: await getMainKeyboard(userId)
   });
+});
+
+bot.command('info', async (ctx) => {
+  const infoText = 
+    'ℹ️ <b>Информация о боте Кагуя 2.0</b>\n\n' +
+    '🤖 Этот бот помогает управлять автоответами для Telegram Business.\n' +
+    '• <b>Режим кулдауна (15 мин):</b> Бот отвечает клиенту только 1 раз, после чего уходит в тишину на 15 минут, не мешая вашей живой переписке.\n' +
+    '• <b>Кнопка вкл/выкл:</b> Позволяет полностью останавливать или запускать автоответчик в один клик.\n\n' +
+    '📢 <b>Канал проекта:</b> @kaguya_2_0_bots';
+  
+  await ctx.reply(infoText, { parse_mode: 'HTML', disable_web_page_preview: true });
+});
+
+bot.hears('ℹ️ Инфо', async (ctx) => {
+  const infoText = 
+    'ℹ️ <b>Информация о боте Кагуя 2.0</b>\n\n' +
+    '🤖 Этот бот помогает управлять автоответами для Telegram Business.\n' +
+    '• <b>Режим кулдауна (15 мин):</b> Бот отвечает клиенту только 1 раз, после чего уходит в тишину на 15 минут, не мешая вашей живой переписке.\n' +
+    '• <b>Кнопка вкл/выкл:</b> Позволяет полностью останавливать или запускать автоответчик в один клик.\n\n' +
+    '📢 <b>Канал проекта:</b> @kaguya_2_0_bots';
+  
+  await ctx.reply(infoText, { parse_mode: 'HTML', disable_web_page_preview: true });
 });
 
 bot.hears('🔕 Выключить автоответ', async (ctx) => {
@@ -118,7 +140,7 @@ bot.hears(['⏱️ Режим: Кулдаун 15 мин (Вкл)', '⚡ Режи
   userCooldownModes.set(userId, newMode);
 
   const modeDesc = newMode 
-    ? '⏱️ <b>Кулдаун 15 минут</b> (Бот отвечает клиенту 1 раз, затем молчит 15 минут)' 
+    ? '⏱️ <b>Кулдаун 15 минут</b> (Бот отвечает клиенту 1 раз, затем молчит 15 минут, не мешая переписке)' 
     : '⚡ <b>Обычный режим</b> (Стандартное поведение)';
 
   await ctx.reply(`✅ <b>Режим успешно изменен лично для вас!</b>\n\nТекущий режим: ${modeDesc}`, {
@@ -257,16 +279,18 @@ bot.on('business_message', async (ctx) => {
     }
     if (isActive === false) return; 
 
+    // Если владелец сам написал в чат — откладываем ответ на 10 минут
     if (senderId === ownerId) {
       localPauses.set(chatId, Date.now() + PAUSE_DURATION);
       return;
     }
 
+    // Проверяем кулдаун (если включен режим кулдауна, бот не отвечает повторно в течение 15 минут)
     const isOwnerInCooldownMode = userCooldownModes.get(ownerId) || false;
     if (isOwnerInCooldownMode) {
       const cooldownUntil = localPauses.get(chatId);
       if (cooldownUntil && cooldownUntil > Date.now()) {
-        return; 
+        return; // Бот молчит и не мешает переписке
       }
     }
 
@@ -297,9 +321,8 @@ bot.on('business_message', async (ctx) => {
         await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
       }
 
-      if (isOwnerInCooldownMode) {
-        localPauses.set(chatId, Date.now() + COOLDOWN_DURATION);
-      }
+      // Сразу после отправки включаем 15-минутный таймер для этого чата
+      localPauses.set(chatId, Date.now() + COOLDOWN_DURATION);
 
     } catch (sendError) {
       if (db.saveErrorLog) await db.saveErrorLog(chatId, 'SEND_ERROR', sendError.message);
