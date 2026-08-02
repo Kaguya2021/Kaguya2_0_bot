@@ -508,3 +508,112 @@ async function isWithinWorkingHours(ownerId) {
 
     return startMinutes <= endMinutes 
       ? (currentMinutes >= startMinutes && currentMi
+         : (currentMinutes >= startMinutes || currentMinutes <= endMinutes);
+  } catch (e) {
+    return true;
+  }
+}
+
+// ==========================================
+// 4. ОБРАБОТЧИК БИЗНЕС-СООБЩЕНИЙ (С ДИАГНОСТИКОЙ)
+// ==========================================
+bot.on('business_message', async (ctx) => {
+  // ДИАГНОСТИЧЕСКИЙ ЛОГ: если это сообщение появится в консоли, значит Telegram доставляет сообщения боту
+  console.log('🔥 Сработало событие business_message!', ctx.businessMessage?.text || '[не текст]');
+
+  try {
+    if (globalThis.globalStop) return;
+    const businessMessage = ctx.businessMessage;
+    if (!businessMessage || businessMessage.from.is_bot) return;
+
+    const connectionId = businessMessage.business_connection_id; 
+    const chatId = String(businessMessage.chat.id);
+    const messageId = businessMessage.message_id;
+    const senderId = String(businessMessage.from.id);
+
+    const uniqueKey = `${chatId}:${messageId}`;
+    if (processedMessages.has(uniqueKey)) return;
+    processedMessages.add(uniqueKey);
+    setTimeout(() => processedMessages.delete(uniqueKey), 30 * 1000);
+
+    let ownerId = connectionOwners.get(connectionId);
+    if (!ownerId) {
+      try {
+        const conn = await ctx.getBusinessConnection();
+        if (conn?.user) {
+          ownerId = String(conn.user.id);
+          connectionOwners.set(connectionId, ownerId);
+        }
+      } catch (e) {}
+    }
+
+    if (!ownerId) return;
+
+    let isActive = userStatuses.get(ownerId);
+    if (isActive === undefined) {
+      if (db.getUserActiveStatus) {
+        isActive = await db.getUserActiveStatus(ownerId).catch(() => true);
+      } else {
+        isActive = true;
+      }
+      userStatuses.set(ownerId, isActive);
+    }
+    if (isActive === false) return; 
+
+    if (senderId === ownerId) {
+      localPauses.set(chatId, Date.now() + PAUSE_DURATION);
+      return;
+    }
+
+    const isOwnerInCooldownMode = userCooldownModes.get(ownerId) || false;
+    if (isOwnerInCooldownMode) {
+      const cooldownUntil = localPauses.get(chatId);
+      if (cooldownUntil && cooldownUntil > Date.now()) {
+        return; 
+      }
+    } else {
+      const localPauseUntil = localPauses.get(chatId);
+      if (localPauseUntil && localPauseUntil > Date.now()) return;
+    }
+
+    if (await db.isPaused?.(chatId).catch(() => false)) return;
+    if (!(await isWithinWorkingHours(ownerId))) return;
+
+    localPauses.set(chatId, Date.now() + (isOwnerInCooldownMode ? COOLDOWN_DURATION : ANTI_SPAM_PAUSE));
+
+    let replyText = replyCache.get(ownerId);
+    if (!replyText) {
+      replyText = await db.getCustomReply(ownerId).catch(() => null);
+      if (replyText) {
+        replyCache.set(ownerId, replyText);
+      }
+    }
+
+    if (!replyText) {
+      replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
+    }
+
+    try {
+      if (replyText.startsWith('combo:')) {
+        const parts = replyText.replace('combo:', '').split('|||');
+        if (parts[0]) await ctx.api.sendMessage(chatId, parts[0], { business_connection_id: connectionId, parse_mode: 'HTML' });
+        if (parts[1]) await ctx.api.sendSticker(chatId, parts[1], { business_connection_id: connectionId });
+        return;
+      }
+
+      if (replyText.startsWith('voice:')) {
+        const voiceFileId = replyText.replace('voice:', '').trim();
+        await ctx.api.sendVoice(chatId, voiceFileId, { business_connection_id: connectionId });
+        return;
+      }
+
+      await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
+    } catch (sendError) {
+      if (db.saveErrorLog) await db.saveErrorLog(chatId, 'SEND_ERROR', sendError.message);
+    }
+  } catch (error) {
+    console.error('Ошибка бизнес-чата:', error);
+  }
+});
+
+bot.start();
