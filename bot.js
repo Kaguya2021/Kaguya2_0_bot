@@ -13,7 +13,7 @@ export const bot = new Bot(process.env.BOT_TOKEN);
 const ADMIN_IDS = ['6511859639', '7470537453'];
 
 const PAUSE_DURATION = 10 * 60 * 1000;    
-const COOLDOWN_DURATION = 15 * 60 * 1000; // ⏱️ Кулдаун 15 минут (бот отвечает 1 раз и молчит 15 минут)
+const COOLDOWN_DURATION = 15 * 60 * 1000; // ⏱️ Кулдаун 15 минут
 
 const processedMessages = new Set();
 const localPauses = new Map();
@@ -48,7 +48,7 @@ async function getMainKeyboard(userId) {
     .text(modeButtonText).row() 
     .text('✍️ Установить текст').text('🎤 Голосовой автоответ').row()
     .text('🖼️ Комбо (Текст + Стикер)').text('🔍 Мой автоответ').row()
-    .text('ℹ️ Инфо').text('🗑️ Сбросить').row(); // 👈 Вернули кнопку Инфо в меню
+    .text('ℹ️ Инфо').text('🗑️ Сбросить').row();
 
   if (isAdmin(userId)) {
     kb.text('🔒 ADMINPPA').row();
@@ -84,23 +84,56 @@ bot.command('start', async (ctx) => {
   });
 });
 
+// --- КОМАНДА /info (Поддержка просмотра данных по ID для админов) ---
 bot.command('info', async (ctx) => {
+  const userId = String(ctx.from.id);
+  const args = ctx.match ? ctx.match.trim() : '';
+
+  // Если админ передал ID пользователя (например, /info 123456789)
+  if (isAdmin(userId) && args) {
+    const targetId = args;
+    const isActive = userStatuses.get(targetId) ?? 'Неизвестно (нет в памяти)';
+    const isCooldown = userCooldownModes.get(targetId) ? 'Включен (15 мин)' : 'Выключен (Обычный)';
+    const customReply = replyCache.get(targetId) || await db.getCustomReply(targetId).catch(() => null) || 'Дефолтный текст';
+    
+    let scheduleInfo = 'Не настроено';
+    try {
+      const sch = await db.getSchedule(targetId);
+      if (sch && sch.start_time && sch.end_time) {
+        scheduleInfo = `${sch.start_time} - ${sch.end_time}`;
+      }
+    } catch (e) {}
+
+    const adminReport = 
+      `🔍 <b>Информация о пользователе (ID: ${targetId}):</b>\n\n` +
+      `• <b>Статус автоответа:</b> ${isActive === true ? '🟢 Активен' : isActive === false ? '🔴 Выключен' : isActive}\n` +
+      `• <b>Режим кулдауна:</b> ${isCooldown}\n` +
+      `• <b>График работы:</b> ${scheduleInfo}\n` +
+      `• <b>Текущий текст автоответа:</b>\n<code>${customReply}</code>`;
+
+    return await ctx.reply(adminReport, { parse_mode: 'HTML' });
+  }
+
+  // Обычная справка для пользователя или самого админа
   const infoText = 
     'ℹ️ <b>Информация о боте Кагуя 2.0</b>\n\n' +
-    '🤖 Этот бот помогает управлять автоответами для Telegram Business.\n' +
+    '🤖 Персональный автоответчик для Telegram Business.\n' +
     '• <b>Режим кулдауна (15 мин):</b> Бот отвечает клиенту только 1 раз, после чего уходит в тишину на 15 минут, не мешая вашей живой переписке.\n' +
-    '• <b>Кнопка вкл/выкл:</b> Позволяет полностью останавливать или запускать автоответчик в один клик.\n\n' +
+    '• <b>Кнопка вкл/выкл:</b> Позволяет быстро останавливать или запускать автоответчик.\n\n' +
+    (isAdmin(userId) ? '👑 <i>Админ-совет:</i> Введите <code>/info ID_пользователя</code>, чтобы посмотреть его настройки.\n\n' : '') +
     '📢 <b>Канал проекта:</b> @kaguya_2_0_bots';
   
   await ctx.reply(infoText, { parse_mode: 'HTML', disable_web_page_preview: true });
 });
 
 bot.hears('ℹ️ Инфо', async (ctx) => {
+  const userId = String(ctx.from.id);
   const infoText = 
     'ℹ️ <b>Информация о боте Кагуя 2.0</b>\n\n' +
-    '🤖 Этот бот помогает управлять автоответами для Telegram Business.\n' +
+    '🤖 Персональный автоответчик для Telegram Business.\n' +
     '• <b>Режим кулдауна (15 мин):</b> Бот отвечает клиенту только 1 раз, после чего уходит в тишину на 15 минут, не мешая вашей живой переписке.\n' +
-    '• <b>Кнопка вкл/выкл:</b> Позволяет полностью останавливать или запускать автоответчик в один клик.\n\n' +
+    '• <b>Кнопка вкл/выкл:</b> Позволяет быстро останавливать или запускать автоответчик.\n\n' +
+    (isAdmin(userId) ? '👑 <i>Админ-совет:</i> Введите команду <code>/info ID_пользователя</code> в чате с ботом, чтобы посмотреть его настройки.\n\n' : '') +
     '📢 <b>Канал проекта:</b> @kaguya_2_0_bots';
   
   await ctx.reply(infoText, { parse_mode: 'HTML', disable_web_page_preview: true });
@@ -279,18 +312,16 @@ bot.on('business_message', async (ctx) => {
     }
     if (isActive === false) return; 
 
-    // Если владелец сам написал в чат — откладываем ответ на 10 минут
     if (senderId === ownerId) {
       localPauses.set(chatId, Date.now() + PAUSE_DURATION);
       return;
     }
 
-    // Проверяем кулдаун (если включен режим кулдауна, бот не отвечает повторно в течение 15 минут)
     const isOwnerInCooldownMode = userCooldownModes.get(ownerId) || false;
     if (isOwnerInCooldownMode) {
       const cooldownUntil = localPauses.get(chatId);
       if (cooldownUntil && cooldownUntil > Date.now()) {
-        return; // Бот молчит и не мешает переписке
+        return; 
       }
     }
 
@@ -321,7 +352,6 @@ bot.on('business_message', async (ctx) => {
         await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
       }
 
-      // Сразу после отправки включаем 15-минутный таймер для этого чата
       localPauses.set(chatId, Date.now() + COOLDOWN_DURATION);
 
     } catch (sendError) {
