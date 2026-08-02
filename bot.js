@@ -521,7 +521,7 @@ async function isWithinWorkingHours(ownerId) {
 // ==========================================
 bot.on('business_message', async (ctx) => {
   // ДИАГНОСТИЧЕСКИЙ ЛОГ: если это сообщение появится в консоли, значит Telegram доставляет сообщения боту
-  console.log('🔥 Сработало событие business_message!', ctx.businessMessage?.text || '[не текст]');
+//  console.log('🔥 Сработало событие business_message!', ctx.businessMessage?.text || '[не текст]');
 
   try {
     if (globalThis.globalStop) return;
