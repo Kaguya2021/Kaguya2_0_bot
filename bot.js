@@ -13,8 +13,8 @@ export const bot = new Bot(process.env.BOT_TOKEN);
 // Список администраторов бота
 const ADMIN_IDS = ['6511859639', '7470537453'];
 
-const PAUSE_DURATION = 10 * 60 * 1000; // Пауза 10 минут при ответе владельца
-const ANTI_SPAM_PAUSE = 3000;          // Анти-спам пауза 3 секунды
+const PAUSE_DURATION = 10 * 60 * 1000;    // Пауза 10 минут при ответе владельца
+const COOLDOWN_DURATION = 15 * 60 * 1000; // Кулдаун автоответа: 1 сообщение в 15 минут
 
 const processedMessages = new Set();
 const localPauses = new Map();
@@ -52,10 +52,10 @@ bot.command('start', async (ctx) => {
 
   const welcomeText = 
     '👋 <b>Привет! Я бот Кагуя 2.0.</b>\n\n' +
-    '⚙️ Я работающий автоответчик для вашего Telegram Business!\n\n' +
-    '📢 <b>Наш официальный канал:</b> <a href="https://t.me/kaguya_2_0_bots">Kaguya 2.0 Channel</a>\n' +
-    '<i>Подпишитесь, чтобы быть в курсе всех обновлений и новостей!</i>\n\n' +
-    '👇 <b>Используйте удобное меню ниже для настройки:</b>';
+    '⚙️ Я персональный автоответчик для вашего Telegram Business!\n' +
+    'Вы можете легко настроить свой собственный текст, голосовое или комбо-сообщение.\n\n' +
+    '📢 <b>Наш официальный канал:</b> <a href="https://t.me/kaguya_2_0_bots">Kaguya 2.0 Channel</a>\n\n' +
+    '👇 <b>Используйте меню ниже для настройки:</b>';
 
   const inlineKb = new InlineKeyboard()
     .url('📢 Подписаться на канал', 'https://t.me/kaguya_2_0_bots');
@@ -66,7 +66,7 @@ bot.command('start', async (ctx) => {
     disable_web_page_preview: true 
   });
 
-  await ctx.reply('🚀 **Главное меню автоответчика:**', {
+  await ctx.reply('🚀 <b>Главное меню автоответчика:</b>', {
     reply_markup: getMainKeyboard(userId)
   });
 });
@@ -280,7 +280,6 @@ bot.command('info', async (ctx) => {
   }
 
   try {
-    // Поддержка различных методов базы данных для получения информации
     let userInfo = {};
     if (db.getUserInfo) {
       userInfo = await db.getUserInfo(targetId) || {};
@@ -441,7 +440,7 @@ async function isWithinWorkingHours(ownerId) {
   }
 }
 
-// --- ИСПРАВЛЕННЫЙ ОБРАБОТЧИК БИЗНЕС-ЧАТОВ ДЛЯ ВСЕХ ЮЗЕРОВ ---
+// --- ОБРАБОТЧИК БИЗНЕС-ЧАТОВ С КУЛДАУНОМ 15 МИНУТ ---
 bot.on('business_message', async (ctx) => {
   try {
     if (globalThis.globalStop) return;
@@ -458,7 +457,7 @@ bot.on('business_message', async (ctx) => {
     processedMessages.add(uniqueKey);
     setTimeout(() => processedMessages.delete(uniqueKey), 30 * 1000);
 
-    // Определяем владельца бизнес-аккаунта (с кэшированием для скорости)
+    // Определяем владельца бизнес-аккаунта
     let ownerId = connectionOwners.get(connectionId);
     if (!ownerId) {
       try {
@@ -472,20 +471,22 @@ bot.on('business_message', async (ctx) => {
 
     if (!ownerId) return;
 
-    // Если сам владелец написал в чат — делаем паузу
+    // Если сам владелец написал в чат — откладываем автоответ на 10 минут
     if (senderId === ownerId) {
       localPauses.set(chatId, Date.now() + PAUSE_DURATION);
       return;
     }
 
-    const localPauseUntil = localPauses.get(chatId);
-    if (localPauseUntil && localPauseUntil > Date.now()) return;
+    // 🛑 КУЛДАУН: проверка, прошло ли 15 минут с последнего автоответа этому чату
+    const cooldownUntil = localPauses.get(chatId);
+    if (cooldownUntil && cooldownUntil > Date.now()) {
+      return; 
+    }
+
     if (await db.isPaused?.(chatId).catch(() => false)) return;
     if (!(await isWithinWorkingHours(ownerId))) return;
 
-    localPauses.set(chatId, Date.now() + ANTI_SPAM_PAUSE);
-
-    // Загружаем автоответ именно владельца этого бизнес-аккаунта из кэша или БД
+    // Загружаем индивидуальный автоответ владельца этого аккаунта
     let replyText = replyCache.get(ownerId);
     if (!replyText) {
       replyText = await db.getCustomReply(ownerId).catch(() => null);
@@ -503,16 +504,16 @@ bot.on('business_message', async (ctx) => {
         const parts = replyText.replace('combo:', '').split('|||');
         if (parts[0]) await ctx.api.sendMessage(chatId, parts[0], { business_connection_id: connectionId, parse_mode: 'HTML' });
         if (parts[1]) await ctx.api.sendSticker(chatId, parts[1], { business_connection_id: connectionId });
-        return;
-      }
-
-      if (replyText.startsWith('voice:')) {
+      } else if (replyText.startsWith('voice:')) {
         const voiceFileId = replyText.replace('voice:', '').trim();
         await ctx.api.sendVoice(chatId, voiceFileId, { business_connection_id: connectionId });
-        return;
+      } else {
+        await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
       }
 
-      await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
+      // ✅ Успешно ответили — ставим кулдаун ровно на 15 минут
+      localPauses.set(chatId, Date.now() + COOLDOWN_DURATION);
+
     } catch (sendError) {
       if (db.saveErrorLog) await db.saveErrorLog(chatId, 'SEND_ERROR', sendError.message);
     }
@@ -520,3 +521,4 @@ bot.on('business_message', async (ctx) => {
     console.error('Ошибка бизнес-чата:', error);
   }
 });
+          
