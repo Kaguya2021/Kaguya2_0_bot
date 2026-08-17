@@ -1,7 +1,6 @@
 import { Bot, InlineKeyboard, Keyboard } from 'grammy';
 import { db } from './database.js';
 import dotenv from 'dotenv';
-import express from 'express';
 
 dotenv.config();
 
@@ -591,17 +590,7 @@ bot.on('business_message', async (ctx) => {
   } catch (error) {}
 });
 
-// Запускаем бота
-bot.start();
-
-// Поднимаем мини-сервер для Express, чтобы Render не выдавал ошибку таймаута (Timed out)
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.get('/', (req, res) => {
-  res.send('Kaguya 2.0 Bot is running successfully!');
-});
-
-app.listen(PORT, () => {
-  console.log(`HTTP server is listening on port ${PORT}`);
-});
+// Запуск и HTTP-сервер настроены в index.js (webhook-режим через Express).
+// Здесь НЕ должно быть bot.start() (long polling) и НЕ должно быть отдельного
+// app.listen — иначе конфликт с webhook и/или занятый порт, из-за чего бот
+// не отвечает при деплое на Render.
