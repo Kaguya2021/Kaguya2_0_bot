@@ -11,6 +11,28 @@ if (!process.env.BOT_TOKEN) {
 
 export const bot = new Bot(process.env.BOT_TOKEN);
 
+// Список ошибок Telegram API, которые не нужно логировать целиком (заблокировал бота, чат удалён и т.п.)
+const SILENT_ERROR_PATTERNS = [
+  'bot was blocked by the user',
+  'user is deactivated',
+  'chat not found',
+  'CHAT_WRITE_FORBIDDEN',
+  'not enough rights',
+  'bot was kicked'
+];
+
+// Глобальный обработчик ошибок: вместо огромного дампа ctx/api/update пишем одну короткую строку,
+// а для ожидаемых/безобидных ошибок (юзер заблокировал бота и т.д.) вообще ничего не пишем.
+// Это нужно, чтобы не забивать лимит логов на Render.
+bot.catch((err) => {
+  const description = err?.error?.description || err?.message || String(err);
+  const isSilent = SILENT_ERROR_PATTERNS.some((p) => description.includes(p));
+  if (isSilent) return;
+
+  const updateId = err?.ctx?.update?.update_id;
+  console.error(`❌ BotError [update ${updateId ?? '?'}]: ${description}`);
+});
+
 const ADMIN_IDS = ['6511859639', '7470537453'];
 
 const PAUSE_DURATION = 10 * 60 * 1000;    
@@ -137,7 +159,7 @@ bot.command('my', async (ctx) => {
 bot.command(['reset', 'clear'], async (ctx) => {
   const userId = String(ctx.from.id);
   replyCache.delete(userId);
-  await db.setCustomReply(userId, null).catch(console.error);
+  await db.setCustomReply(userId, null).catch((e) => console.error('DB error:', e.message));
   stepState.delete(userId);
   await ctx.reply('🗑️ <b>Ваш автоответ успешно сброшен!</b>', { parse_mode: 'HTML' });
 });
@@ -315,7 +337,7 @@ bot.command('set', async (ctx) => {
 
     stepState.delete(userId);
     replyCache.set(userId, customText);
-    db.setCustomReply(userId, customText).catch(console.error);
+    db.setCustomReply(userId, customText).catch((e) => console.error('DB error:', e.message));
 
     await ctx.reply(`✅ <b>Успешно сохранено!</b>\n\n${customText}`, { parse_mode: 'HTML' });
   } catch (err) {
@@ -384,7 +406,7 @@ bot.hears('🔍 Мой автоответ', async (ctx) => {
 bot.hears('🗑️ Сбросить', async (ctx) => {
   const userId = String(ctx.from.id);
   replyCache.delete(userId);
-  await db.setCustomReply(userId, null).catch(console.error);
+  await db.setCustomReply(userId, null).catch((e) => console.error('DB error:', e.message));
   stepState.delete(userId);
 
   await ctx.reply('🗑️ <b>Ваш автоответ успешно сброшен!</b> Теперь будет отправляться стандартный текст.', { parse_mode: 'HTML' });
@@ -415,7 +437,7 @@ bot.on('message', async (ctx, next) => {
   if (state && state.step === 'WAITING_TEXT_ONLY' && ctx.message.text) {
     const text = ctx.message.text;
     replyCache.set(userId, text);
-    db.setCustomReply(userId, text).catch(console.error);
+    db.setCustomReply(userId, text).catch((e) => console.error('DB error:', e.message));
     stepState.delete(userId);
     return await ctx.reply(`✅ <b>Новый текстовый автоответ сохранён!</b>\n\n${text}`, { parse_mode: 'HTML' });
   }
@@ -452,7 +474,7 @@ bot.on('message', async (ctx, next) => {
     const stickerId = ctx.message.sticker.file_id;
     const comboValue = `combo:${state.text}|||${stickerId}`;
     replyCache.set(userId, comboValue);
-    db.setCustomReply(userId, comboValue).catch(console.error);
+    db.setCustomReply(userId, comboValue).catch((e) => console.error('DB error:', e.message));
     stepState.delete(userId);
     return await ctx.reply('🔥 <b>Комбо автоответ (Текст + Стикер) сохранён!</b>', { parse_mode: 'HTML' });
   }
@@ -461,7 +483,7 @@ bot.on('message', async (ctx, next) => {
     const fileId = ctx.message.voice.file_id;
     const value = `voice:${fileId}`;
     replyCache.set(userId, value);
-    db.setCustomReply(userId, value).catch(console.error);
+    db.setCustomReply(userId, value).catch((e) => console.error('DB error:', e.message));
     stepState.delete(userId);
     return await ctx.reply('✅ <b>Голосовой автоответ сохранён!</b>', { parse_mode: 'HTML' });
   }
