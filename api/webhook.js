@@ -1,26 +1,23 @@
-import { bot } from '../bot.js';
+import { webhookCallback } from 'grammy';
+import { bot } from '../bot.js'; // Путь к вашему bot.js
+
+const handleUpdate = webhookCallback(bot, 'express');
 
 export default async function handler(req, res) {
-  if (req.method === 'GET') {
-    return res.status(200).send('🤖 Kaguya Bot is active!');
-  }
-
-  if (req.method === 'POST') {
-    try {
-      if (!bot.isInited || !bot.isInited()) {
-        await bot.init();
-      }
-
-      // Гарантируем, что body — это объект
-      const update = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-      
-      await bot.handleUpdate(update);
-      return res.status(200).json({ ok: true });
-    } catch (error) {
-      console.error('❌ Ошибка при обработке апдейта:', error);
-      return res.status(200).json({ ok: true });
+  try {
+    await handleUpdate(req, res);
+  } catch (err) {
+    // Глушим ошибки 403 и блокировки на уровне HTTP-эндпоинта
+    const msg = err?.message || String(err);
+    if (
+      err?.error_code === 403 ||
+      msg.includes('blocked by the user') ||
+      msg.includes('user is deactivated')
+    ) {
+      return res.status(200).send('OK');
     }
+    
+    console.error('❌ Ошибка вебхука:', msg);
+    res.status(200).send('OK'); // Telegram всегда должен получать 200 OK
   }
-
-  return res.status(405).send('Method Not Allowed');
 }
