@@ -1,4 +1,4 @@
-import { Bot, InlineKeyboard, Keyboard } from 'grammy';
+import { Bot, InlineKeyboard, Keyboard, GrammyError } from 'grammy';
 import { db } from './database.js';
 import dotenv from 'dotenv';
 
@@ -19,7 +19,7 @@ function escapeHTML(text) {
     .replace(/>/g, '&gt;');
 }
 
-// Список ошибок Telegram API, которые не нужно логировать целиком
+// Список ошибок Telegram API, которые не нужно логировать
 const SILENT_ERROR_PATTERNS = [
   'bot was blocked by the user',
   'user is deactivated',
@@ -29,11 +29,21 @@ const SILENT_ERROR_PATTERNS = [
   'bot was kicked'
 ];
 
-// Глобальный обработчик ошибок
+// Глобальный обработчик ошибок (полностью скрывает ошибки блокировки юзерами)
 bot.catch((err) => {
-  const description = err?.error?.description || err?.message || String(err);
-  const isSilent = SILENT_ERROR_PATTERNS.some((p) => description.includes(p));
-  if (isSilent) return;
+  const e = err.error;
+  const description = e?.description || err?.message || String(err);
+
+  if (e instanceof GrammyError) {
+    if (
+      e.error_code === 403 ||
+      SILENT_ERROR_PATTERNS.some((p) => description.includes(p))
+    ) {
+      return;
+    }
+  } else if (SILENT_ERROR_PATTERNS.some((p) => description.includes(p))) {
+    return;
+  }
 
   const updateId = err?.ctx?.update?.update_id;
   console.error(`❌ BotError [update ${updateId ?? '?'}]: ${description}`);
