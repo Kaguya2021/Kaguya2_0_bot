@@ -5,6 +5,19 @@ import { bot } from './bot.js';
 const app = express();
 app.use(express.json());
 
+// Подавляет вывод 403 ошибок в консоль Render
+process.on('unhandledRejection', (reason) => {
+  const msg = reason?.message || String(reason);
+  if (
+    reason?.error_code === 403 ||
+    msg.includes('blocked by the user') ||
+    msg.includes('user is deactivated')
+  ) {
+    return; // Просто игнорируем
+  }
+  console.error('Unhandled Rejection:', reason);
+});
+
 // 1. Эндпоинт для внешних пинговалок (UptimeRobot)
 app.get('/ping', (req, res) => {
   res.status(200).send('pong');
