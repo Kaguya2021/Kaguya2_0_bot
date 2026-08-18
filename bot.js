@@ -20,9 +20,7 @@ const SILENT_ERROR_PATTERNS = [
   'bot was kicked'
 ];
 
-// Глобальный обработчик ошибок: вместо огромного дампа ctx/api/update пишем одну короткую строку,
-// а для ожидаемых/безобидных ошибок (юзер заблокировал бота и т.д.) вообще ничего не пишем.
-// Это нужно, чтобы не забивать лимит логов на Render.
+// Глобальный обработчик ошибок
 bot.catch((err) => {
   const description = err?.error?.description || err?.message || String(err);
   const isSilent = SILENT_ERROR_PATTERNS.some((p) => description.includes(p));
@@ -36,16 +34,16 @@ const ADMIN_IDS = ['6511859639', '7470537453'];
 
 const PAUSE_DURATION = 10 * 60 * 1000;    
 const ANTI_SPAM_PAUSE = 3000;          
-const AUTO_OFF_DURATION = 5 * 60 * 1000; // Автовыключение автоответа на 5 минут
+const AUTO_OFF_DURATION = 5 * 60 * 1000; 
 
 const processedMessages = new Set();
 const localPauses = new Map();
 const replyCache = new Map();
 const stepState = new Map();
-const autoOffUntil = new Map(); // userId -> timestamp, до которого автоответ выключен
+const autoOffUntil = new Map(); 
 const connectionOwners = new Map();
 
-// Проверяет, активен ли автоответ у пользователя (с учётом автовыключения на 5 минут)
+// Проверяет, активен ли автоответ у пользователя
 function isAutoReplyActive(userId) {
   const until = autoOffUntil.get(userId);
   if (!until) return true;
@@ -56,7 +54,7 @@ function isAutoReplyActive(userId) {
   return false;
 }
 
-// Сколько минут осталось до автовключения (минимум 1)
+// Сколько минут осталось до автовключения
 function getAutoOffMinutesLeft(userId) {
   const until = autoOffUntil.get(userId);
   if (!until) return 0;
@@ -542,7 +540,7 @@ bot.on('business_message', async (ctx) => {
 
     if (!ownerId) return;
 
-    if (!isAutoReplyActive(ownerId)) return; // Автоответ временно выключен (5 мин таймер)
+    if (!isAutoReplyActive(ownerId)) return; 
 
     if (senderId === ownerId) {
       localPauses.set(chatId, Date.now() + PAUSE_DURATION);
@@ -585,12 +583,16 @@ bot.on('business_message', async (ctx) => {
 
       await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
     } catch (sendError) {
-      if (db.saveErrorLog) await db.saveErrorLog(chatId, 'SEND_ERROR', sendError.message);
+      // ИСПРАВЛЕНИЕ: Мягко глушим ошибку блокировки.
+      const errMsg = sendError.message || String(sendError);
+      if (errMsg.includes('blocked by the user') || sendError.error_code === 403) {
+        // Просто выходим. Никаких записей в логи, никаких падений!
+        return; 
+      }
+      // Остальные ошибки пытаемся записать в БД
+      try {
+        if (db.saveErrorLog) await db.saveErrorLog(chatId, 'SEND_ERROR', errMsg);
+      } catch (e) {} // Если лог не пишется - тоже не падаем
     }
   } catch (error) {}
 });
-
-// Запуск и HTTP-сервер настроены в index.js (webhook-режим через Express).
-// Здесь НЕ должно быть bot.start() (long polling) и НЕ должно быть отдельного
-// app.listen — иначе конфликт с webhook и/или занятый порт, из-за чего бот
-// не отвечает при деплое на Render.
