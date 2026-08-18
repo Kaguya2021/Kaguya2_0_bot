@@ -19,34 +19,28 @@ function escapeHTML(text) {
     .replace(/>/g, '&gt;');
 }
 
-// Список ошибок Telegram API, которые не нужно логировать
-const SILENT_ERROR_PATTERNS = [
-  'bot was blocked by the user',
-  'user is deactivated',
-  'chat not found',
-  'CHAT_WRITE_FORBIDDEN',
-  'not enough rights',
-  'bot was kicked'
-];
-
-// Глобальный обработчик ошибок (полностью скрывает ошибки блокировки юзерами)
+// Глобальный обработчик ошибок (полностью подавляет блокировки и убирает дампы объектов)
 bot.catch((err) => {
   const e = err.error;
+  
+  // Проверяем код ошибки и описание
+  const errorCode = e?.error_code || e?.code;
   const description = e?.description || err?.message || String(err);
 
-  if (e instanceof GrammyError) {
-    if (
-      e.error_code === 403 ||
-      SILENT_ERROR_PATTERNS.some((p) => description.includes(p))
-    ) {
-      return;
-    }
-  } else if (SILENT_ERROR_PATTERNS.some((p) => description.includes(p))) {
+  // 1. Игнорируем блокировки пользователем и удаленные чаты
+  if (
+    errorCode === 403 ||
+    description.includes('blocked by the user') ||
+    description.includes('user is deactivated') ||
+    description.includes('chat not found') ||
+    description.includes('bot was kicked')
+  ) {
     return;
   }
 
+  // 2. Для остальных ошибок выводим только короткий текст, а не весь гигантский объект
   const updateId = err?.ctx?.update?.update_id;
-  console.error(`❌ BotError [update ${updateId ?? '?'}]: ${description}`);
+  console.error(`❌ BotError [update ${updateId ?? '?'}]:`, description);
 });
 
 const ADMIN_IDS = ['6511859639', '7470537453'];
