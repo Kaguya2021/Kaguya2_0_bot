@@ -10,7 +10,16 @@ if (!process.env.BOT_TOKEN) {
 
 export const bot = new Bot(process.env.BOT_TOKEN);
 
-// Список ошибок Telegram API, которые не нужно логировать целиком (заблокировал бота, чат удалён и т.п.)
+// Функция экранирования HTML-тегов для защиты от ошибок Telegram API
+function escapeHTML(text) {
+  if (!text) return '';
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+// Список ошибок Telegram API, которые не нужно логировать целиком
 const SILENT_ERROR_PATTERNS = [
   'bot was blocked by the user',
   'user is deactivated',
@@ -150,7 +159,7 @@ bot.command('my', async (ctx) => {
   if (!currentReply) {
     return await ctx.reply('ℹ️ У вас установлен <b>дефолтный текст</b>.', { parse_mode: 'HTML' });
   }
-  await ctx.reply(`✍️ <b>Ваш текущий автоответ:</b>\n\n${currentReply}`, { parse_mode: 'HTML' });
+  await ctx.reply(`✍️ <b>Ваш текущий автоответ:</b>\n\n${escapeHTML(currentReply)}`, { parse_mode: 'HTML' });
 });
 
 bot.command(['reset', 'clear'], async (ctx) => {
@@ -268,7 +277,7 @@ bot.command('info', async (ctx) => {
       infoText += `📅 <b>Подключен:</b> ${userInfo.created_at || userInfo.date || 'Неизвестно'}\n`;
       infoText += `👤 <b>Username/Имя:</b> ${userInfo.username || userInfo.name || 'Нет данных'}\n`;
       infoText += `🔔 <b>Статус автоответа:</b> ${autoReplyStatus}\n`;
-      infoText += `💬 <b>Текущий автоответ:</b>\n<code>${customReply}</code>\n\n`;
+      infoText += `💬 <b>Текущий автоответ:</b>\n<code>${escapeHTML(customReply)}</code>\n\n`;
       infoText += `⏰ <b>График работы:</b> ${schedule?.start_time ? `${schedule.start_time} - ${schedule.end_time}` : 'Круглосуточно'}`;
 
       return await ctx.reply(infoText, { parse_mode: 'HTML' });
@@ -336,7 +345,7 @@ bot.command('set', async (ctx) => {
     replyCache.set(userId, customText);
     db.setCustomReply(userId, customText).catch((e) => console.error('DB error:', e.message));
 
-    await ctx.reply(`✅ <b>Успешно сохранено!</b>\n\n${customText}`, { parse_mode: 'HTML' });
+    await ctx.reply(`✅ <b>Успешно сохранено!</b>\n\n${escapeHTML(customText)}`, { parse_mode: 'HTML' });
   } catch (err) {
     await ctx.reply(`❌ Ошибка: ${err.message}`);
   }
@@ -389,7 +398,7 @@ bot.hears('🔍 Мой автоответ', async (ctx) => {
 
   if (currentReply.startsWith('combo:')) {
     const parts = currentReply.replace('combo:', '').split('|||');
-    return await ctx.reply(`🔥 <b>Ваш автоответ (Комбо):</b>\n\n📝 Текст: <code>${parts[0]}</code>\n🖼️ Sticker ID: <code>${parts[1]}</code>`, { parse_mode: 'HTML' });
+    return await ctx.reply(`🔥 <b>Ваш автоответ (Комбо):</b>\n\n📝 Текст: <code>${escapeHTML(parts[0])}</code>\n🖼️ Sticker ID: <code>${parts[1]}</code>`, { parse_mode: 'HTML' });
   }
 
   if (currentReply.startsWith('voice:')) {
@@ -397,7 +406,7 @@ bot.hears('🔍 Мой автоответ', async (ctx) => {
     return await ctx.reply(`🎤 <b>Ваш автоответ (Голосовое):</b>\nID файла: <code>${voiceId}</code>`, { parse_mode: 'HTML' });
   }
 
-  await ctx.reply(`✍️ <b>Ваш текущий автоответ:</b>\n\n${currentReply}`, { parse_mode: 'HTML' });
+  await ctx.reply(`✍️ <b>Ваш текущий автоответ:</b>\n\n${escapeHTML(currentReply)}`, { parse_mode: 'HTML' });
 });
 
 bot.hears('🗑️ Сбросить', async (ctx) => {
@@ -425,7 +434,7 @@ bot.hears('🔒 ADMINPPA', async (ctx) => {
   }
 });
 
-// ОБНОВЛЕННЫЙ БЛОК: Защита от перехвата кнопок меню
+// Защита от перехвата кнопок меню и обработка шагов ввода
 bot.on('message', async (ctx, next) => {
   if (ctx.businessMessage) return next();
 
@@ -448,7 +457,7 @@ bot.on('message', async (ctx, next) => {
     replyCache.set(userId, text);
     db.setCustomReply(userId, text).catch((e) => console.error('DB error:', e.message));
     stepState.delete(userId);
-    return await ctx.reply(`✅ <b>Новый текстовый автоответ сохранён!</b>\n\n${text}`, { parse_mode: 'HTML' });
+    return await ctx.reply(`✅ <b>Новый текстовый автоответ сохранён!</b>\n\n${escapeHTML(text)}`, { parse_mode: 'HTML' });
   }
 
   if (state && state.step === 'WAITING_POST' && isAdmin(userId)) {
@@ -516,7 +525,7 @@ async function isWithinWorkingHours(ownerId) {
     if (startMinutes <= endMinutes) {
       return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
     } else {
-      return currentMinutes >= startMinutes >= startMinutes || currentMinutes <= endMinutes;
+      return currentMinutes >= startMinutes || currentMinutes <= endMinutes;
     }
   } catch (e) {
     return true;
@@ -582,7 +591,7 @@ bot.on('business_message', async (ctx) => {
     try {
       if (replyText.startsWith('combo:')) {
         const parts = replyText.replace('combo:', '').split('|||');
-        if (parts[0]) await ctx.api.sendMessage(chatId, parts[0], { business_connection_id: connectionId, parse_mode: 'HTML' });
+        if (parts[0]) await ctx.api.sendMessage(chatId, escapeHTML(parts[0]), { business_connection_id: connectionId, parse_mode: 'HTML' });
         if (parts[1]) await ctx.api.sendSticker(chatId, parts[1], { business_connection_id: connectionId });
         return;
       }
@@ -593,18 +602,15 @@ bot.on('business_message', async (ctx) => {
         return;
       }
 
-      await ctx.api.sendMessage(chatId, replyText, { business_connection_id: connectionId, parse_mode: 'HTML' });
+      await ctx.api.sendMessage(chatId, escapeHTML(replyText), { business_connection_id: connectionId, parse_mode: 'HTML' });
     } catch (sendError) {
-      // ИСПРАВЛЕНИЕ: Мягко глушим ошибку блокировки.
       const errMsg = sendError.message || String(sendError);
       if (errMsg.includes('blocked by the user') || sendError.error_code === 403) {
-        // Просто выходим. Никаких записей в логи, никаких падений!
         return; 
       }
-      // Остальные ошибки пытаемся записать в БД
       try {
         if (db.saveErrorLog) await db.saveErrorLog(chatId, 'SEND_ERROR', errMsg);
-      } catch (e) {} // Если лог не пишется - тоже не падаем
+      } catch (e) {}
     }
   } catch (error) {}
 });
