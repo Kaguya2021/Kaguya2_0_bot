@@ -425,8 +425,20 @@ bot.hears('🔒 ADMINPPA', async (ctx) => {
   }
 });
 
+// ОБНОВЛЕННЫЙ БЛОК: Защита от перехвата кнопок меню
 bot.on('message', async (ctx, next) => {
   if (ctx.businessMessage) return next();
+
+  // Игнорируем нажатия кнопок меню, чтобы они не перехватывались как текст
+  const menuButtons = [
+    '🔕 Выключить автоответ', '🔔 Включить автоответ', 
+    '✍️ Установить текст', '🎤 Голосовой автоответ', 
+    '🖼️ Комбо (Текст + Стикер)', '🔍 Мой автоответ', 
+    '⏰ Настроить время', '🗑️ Сбросить', '🔒 ADMINPPA'
+  ];
+  if (ctx.message.text && menuButtons.some(btn => ctx.message.text.startsWith(btn))) {
+    return next();
+  }
 
   const userId = String(ctx.from.id);
   const state = stepState.get(userId);
@@ -504,7 +516,7 @@ async function isWithinWorkingHours(ownerId) {
     if (startMinutes <= endMinutes) {
       return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
     } else {
-      return currentMinutes >= startMinutes || currentMinutes <= endMinutes;
+      return currentMinutes >= startMinutes >= startMinutes || currentMinutes <= endMinutes;
     }
   } catch (e) {
     return true;
