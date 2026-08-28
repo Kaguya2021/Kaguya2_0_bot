@@ -10,7 +10,7 @@ if (!process.env.BOT_TOKEN) {
 
 export const bot = new Bot(process.env.BOT_TOKEN);
 
-// Функция экранирования HTML-тегов для защиты от ошибок Telegram API
+// Функция экранирования HTML-тегов
 function escapeHTML(text) {
   if (!text) return '';
   return String(text)
@@ -19,7 +19,7 @@ function escapeHTML(text) {
     .replace(/>/g, '&gt;');
 }
 
-// Глобальный обработчик ошибок (выводит только критические ошибки в консоль)
+// Глобальный обработчик ошибок
 bot.catch((err) => {
   const e = err.error;
   
@@ -521,7 +521,7 @@ async function isWithinWorkingHours(ownerId) {
 
     if (startMinutes <= endMinutes) {
       return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
-      } else {
+    } else {
       return currentMinutes >= startMinutes || currentMinutes <= endMinutes;
     }
   } catch (e) {
