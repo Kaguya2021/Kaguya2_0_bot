@@ -32,7 +32,7 @@ app.get('/', (req, res) => {
 app.post('/api/webhook', webhookCallback(bot, 'express'));
 
 // 4. Бесшумный само-пинг (работает молча, логов нет)
-const RENDER_URL = process.env.RENDER_EXTERNAL_URL || 'https://kaguya2-0-bot-yd5z.onrender.com';
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL || 'https://kaguya2-0-bot-say4.onrender.com';
 
 setInterval(async () => {
   try {
