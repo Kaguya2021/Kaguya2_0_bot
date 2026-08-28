@@ -18,31 +18,22 @@ process.on('unhandledRejection', (reason) => {
   console.error('Unhandled Rejection:', reason);
 });
 
-// 1. Эндпоинт для внешних пинговалок
+// Эндпоинт для вашей внешней бот-пинговалки
 app.get('/ping', (req, res) => {
   res.status(200).send('pong');
 });
 
-// 2. Главная страница проверки статуса
+// Главная страница проверки статуса
 app.get('/', (req, res) => {
   res.send('Кагуя успешно запущена на Render!');
 });
 
-// 3. Обработчик вебхука от Telegram
+// Обработчик вебхука от Telegram
 app.post('/api/webhook', webhookCallback(bot, 'express'));
 
-// 4. Бесшумный само-пинг (работает молча, логов нет)
+const PORT = process.env.PORT || 3000;
 const RENDER_URL = process.env.RENDER_EXTERNAL_URL || 'https://kaguya2-0-bot-say4.onrender.com';
 
-setInterval(async () => {
-  try {
-    await fetch(`${RENDER_URL}/ping`);
-  } catch (e) {
-    // Никаких логов даже при отправке
-  }
-}, 5 * 60 * 1000);
-
-const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   console.log(`🚀 Сервер слушает порт ${PORT}`);
 
