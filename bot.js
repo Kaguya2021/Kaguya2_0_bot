@@ -19,15 +19,13 @@ function escapeHTML(text) {
     .replace(/>/g, '&gt;');
 }
 
-// Глобальный обработчик ошибок (полностью подавляет блокировки и убирает дампы объектов)
+// Глобальный обработчик ошибок (выводит только критические ошибки в консоль)
 bot.catch((err) => {
   const e = err.error;
   
-  // Проверяем код ошибки и описание
   const errorCode = e?.error_code || e?.code;
   const description = e?.description || err?.message || String(err);
 
-  // 1. Игнорируем блокировки пользователем и удаленные чаты
   if (
     errorCode === 403 ||
     description.includes('blocked by the user') ||
@@ -38,7 +36,6 @@ bot.catch((err) => {
     return;
   }
 
-  // 2. Для остальных ошибок выводим только короткий текст, а не весь гигантский объект
   const updateId = err?.ctx?.update?.update_id;
   console.error(`❌ BotError [update ${updateId ?? '?'}]:`, description);
 });
@@ -56,7 +53,6 @@ const stepState = new Map();
 const autoOffUntil = new Map(); 
 const connectionOwners = new Map();
 
-// Проверяет, активен ли автоответ у пользователя
 function isAutoReplyActive(userId) {
   const until = autoOffUntil.get(userId);
   if (!until) return true;
@@ -67,7 +63,6 @@ function isAutoReplyActive(userId) {
   return false;
 }
 
-// Сколько минут осталось до автовключения
 function getAutoOffMinutesLeft(userId) {
   const until = autoOffUntil.get(userId);
   if (!until) return 0;
@@ -438,11 +433,9 @@ bot.hears('🔒 ADMINPPA', async (ctx) => {
   }
 });
 
-// Защита от перехвата кнопок меню и обработка шагов ввода
 bot.on('message', async (ctx, next) => {
   if (ctx.businessMessage) return next();
 
-  // Игнорируем нажатия кнопок меню, чтобы они не перехватывались как текст
   const menuButtons = [
     '🔕 Выключить автоответ', '🔔 Включить автоответ', 
     '✍️ Установить текст', '🎤 Голосовой автоответ', 
@@ -528,7 +521,7 @@ async function isWithinWorkingHours(ownerId) {
 
     if (startMinutes <= endMinutes) {
       return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
-    } else {
+      } else {
       return currentMinutes >= startMinutes || currentMinutes <= endMinutes;
     }
   } catch (e) {
@@ -612,9 +605,6 @@ bot.on('business_message', async (ctx) => {
       if (errMsg.includes('blocked by the user') || sendError.error_code === 403) {
         return; 
       }
-      try {
-        if (db.saveErrorLog) await db.saveErrorLog(chatId, 'SEND_ERROR', errMsg);
-      } catch (e) {}
     }
   } catch (error) {}
 });
