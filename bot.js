@@ -494,13 +494,13 @@ bot.on('message', async (ctx, next) => {
     return await ctx.reply('🔥 <b>Комбо автоответ (Текст + Стикер) сохранён!</b>', { parse_mode: 'HTML' });
   }
 
-  if (state && state.step === 'WAITING_VOICE' && ctx.message.voice) {
-    const fileId = ctx.message.voice.file_id;
+  if (state && state.step === 'WAITING_VOICE' && (ctx.message.voice || ctx.message.audio)) {
+    const fileId = ctx.message.voice?.file_id || ctx.message.audio?.file_id;
     const value = `voice:${fileId}`;
     replyCache.set(userId, value);
     db.setCustomReply(userId, value).catch((e) => console.error('DB error:', e.message));
     stepState.delete(userId);
-    return await ctx.reply('✅ <b>Голосовой автоответ сохранён!</b>', { parse_mode: 'HTML' });
+    return await ctx.reply('✅ <b>Голосовой/аудио автоответ сохранён!</b>', { parse_mode: 'HTML' });
   }
 
   return next();
