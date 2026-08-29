@@ -595,7 +595,11 @@ bot.on('business_message', async (ctx) => {
 
       if (replyText.startsWith('voice:')) {
         const voiceFileId = replyText.replace('voice:', '').trim();
-        await ctx.api.sendVoice(chatId, voiceFileId, { business_connection_id: connectionId });
+        try {
+          await ctx.api.sendVoice(chatId, voiceFileId, { business_connection_id: connectionId });
+        } catch (e) {
+          await ctx.api.sendAudio(chatId, voiceFileId, { business_connection_id: connectionId });
+        }
         return;
       }
 
