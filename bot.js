@@ -106,8 +106,11 @@ bot.command('start', async (ctx) => {
     '<i>Подпишитесь, чтобы быть в курсе всех обновлений и новостей!</i>\n\n' +
     '👇 <b>Используйте удобное меню ниже для настройки:</b>';
 
+  // Создание inline-кнопок с добавленной ссылкой подключения
   const inlineKb = new InlineKeyboard()
-    .url('📢 Подписаться на канал', 'https://t.me/kaguya_2_0_bots');
+    .url('📢 Подписаться на канал', 'https://t.me/kaguya_2_0_bots')
+    .row()
+    .url('🔗 КАК ПОДКЛЮЧИТЬ', 'https://kaguya-gospoja.onrender.com');
 
   await ctx.reply(welcomeText, { 
     parse_mode: 'HTML', 
