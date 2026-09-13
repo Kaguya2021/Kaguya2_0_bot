@@ -43,7 +43,8 @@ bot.catch((err) => {
 const ADMIN_IDS = ['6511859639', '7470537453'];
 
 const PAUSE_DURATION = 10 * 60 * 1000;
-const AUTO_REPLY_COOLDOWN = 15 * 60 * 1000; // 1 автоответ раз в 15 минут на чат
+const ANTI_SPAM_PAUSE = 3000;              // без режима "Таймер": обычная защита от дублей (~3 сек)
+const AUTO_REPLY_COOLDOWN = 15 * 60 * 1000; // с режимом "Таймер": 1 автоответ раз в 15 минут на чат
 const AUTO_OFF_DURATION = 5 * 60 * 1000; 
 
 const processedMessages = new Set();
@@ -53,6 +54,7 @@ const stepState = new Map();
 const autoOffUntil = new Map(); 
 const connectionOwners = new Map();
 const allowedUsernameCache = new Map(); // ownerId -> username (или null)
+const timerModeCache = new Map();       // ownerId -> true/false (режим "Таймер 15 мин")
 
 function isAutoReplyActive(userId) {
   const until = autoOffUntil.get(userId);
@@ -74,18 +76,32 @@ function isAdmin(userId) {
   return ADMIN_IDS.includes(String(userId));
 }
 
+async function getTimerMode(userId) {
+  let enabled = timerModeCache.get(userId);
+  if (enabled === undefined) {
+    enabled = await db.getTimerMode(userId).catch(() => false);
+    timerModeCache.set(userId, enabled);
+  }
+  return enabled;
+}
+
 // Главное меню теперь строится как inline-кнопки (под сообщением), а не обычная клавиатура
-function getMainInlineKeyboard(userId) {
+function getMainInlineKeyboard(userId, timerOn) {
   const isActive = isAutoReplyActive(userId);
   const statusButtonText = isActive
     ? '🔕 Выключить автоответ (5 мин)'
     : `🔔 Включить автоответ (осталось ${getAutoOffMinutesLeft(userId)} мин)`;
+
+  const timerButtonText = timerOn
+    ? '⛔ Таймер откл (сейчас: 1 автоответ / 15 мин)'
+    : '⏱ Таймер 15 мин (сейчас: откл)';
 
   const kb = new InlineKeyboard()
     .text(statusButtonText, 'toggle_autoreply').row()
     .text('✍️ Установить текст', 'set_text').text('🎤 Голосовой автоответ', 'set_voice').row()
     .text('🖼️ Комбо (Текст + Стикер)', 'set_combo').text('🔍 Мой автоответ', 'my_reply').row()
     .text('⏰ Настроить время', 'set_time').text('🗑️ Сбросить', 'reset_reply').row()
+    .text(timerButtonText, 'toggle_timer_mode').row()
     .text('⚙️ Настройки', 'settings_menu').row();
 
   if (isAdmin(userId)) {
@@ -129,7 +145,7 @@ bot.command('start', async (ctx) => {
 
   await ctx.reply('🚀 <b>Главное меню автоответчика:</b>', {
     parse_mode: 'HTML',
-    reply_markup: getMainInlineKeyboard(userId)
+    reply_markup: getMainInlineKeyboard(userId, await getTimerMode(userId))
   });
 });
 
@@ -375,7 +391,24 @@ bot.callbackQuery('toggle_autoreply', async (ctx) => {
     await ctx.answerCallbackQuery({ text: '🔔 Автоответчик включен!' });
   }
   try {
-    await ctx.editMessageReplyMarkup({ reply_markup: getMainInlineKeyboard(userId) });
+    await ctx.editMessageReplyMarkup({ reply_markup: getMainInlineKeyboard(userId, await getTimerMode(userId)) });
+  } catch (e) {}
+});
+
+bot.callbackQuery('toggle_timer_mode', async (ctx) => {
+  const userId = String(ctx.from.id);
+  const current = await getTimerMode(userId);
+  const next = !current;
+  timerModeCache.set(userId, next);
+  await db.setTimerMode(userId, next).catch((e) => console.error('DB error:', e.message));
+
+  await ctx.answerCallbackQuery({
+    text: next
+      ? '⏱ Включено: 1 автоответ раз в 15 минут на чат.'
+      : '⛔ Выключено: автоответ снова на каждое сообщение.'
+  });
+  try {
+    await ctx.editMessageReplyMarkup({ reply_markup: getMainInlineKeyboard(userId, next) });
   } catch (e) {}
 });
 
@@ -480,7 +513,7 @@ bot.callbackQuery('settings_add_account', async (ctx) => {
     'Пример: <code>@kaguya2_0</code>\n\n' +
     'После этого автоответчик будет отвечать только этому аккаунту, всем остальным — нет.\n' +
     'Чтобы отключить ограничение — команда <code>/no us</code>.',
-    { parse_mode: 'HTML' }
+    {  parse_mode: 'HTML' }
   );
 });
 
@@ -489,7 +522,7 @@ bot.callbackQuery('settings_back', async (ctx) => {
   const userId = String(ctx.from.id);
   await ctx.reply('🚀 <b>Главное меню автоответчика:</b>', {
     parse_mode: 'HTML',
-    reply_markup: getMainInlineKeyboard(userId)
+    reply_markup: getMainInlineKeyboard(userId, await getTimerMode(userId))
   });
 });
 
@@ -660,10 +693,13 @@ bot.on('business_message', async (ctx) => {
     if (await db.isPaused?.(chatId).catch(() => false)) return;
     if (!(await isWithinWorkingHours(ownerId))) return;
 
-    // После отправки автоответа ставим паузу на 15 минут для этого чата.
-    // Новое сообщение в течение 15 минут не вызовет повторный автоответ;
-    // после истечения 15 минут следующее сообщение снова запустит автоответ и таймер обновится.
-    localPauses.set(chatId, Date.now() + AUTO_REPLY_COOLDOWN);
+    // Если владелец включил режим "⏱ Таймер 15 мин" — после автоответа этот чат ставится
+    // на паузу 15 минут (новое сообщение раньше не вызовет повторный автоответ).
+    // Если режим выключен (по умолчанию) — обычная защита от дублей на ~3 секунды,
+    // автоответ уходит почти на каждое сообщение.
+    const timerOn = await getTimerMode(ownerId);
+    const cooldown = timerOn ? AUTO_REPLY_COOLDOWN : ANTI_SPAM_PAUSE;
+    localPauses.set(chatId, Date.now() + cooldown);
 
     let replyText = replyCache.get(ownerId);
     if (!replyText) {
