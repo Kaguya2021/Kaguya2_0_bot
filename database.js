@@ -32,7 +32,8 @@ async function ensureDbInit() {
         start_time VARCHAR(10),
         end_time VARCHAR(10),
         reply_mode VARCHAR(20) DEFAULT 'always',
-        allowed_username VARCHAR(100)
+        allowed_username VARCHAR(100),
+        timer_mode BOOLEAN DEFAULT false
       );
     `);
 
@@ -45,6 +46,12 @@ async function ensureDbInit() {
 
     try {
       await client.query(`ALTER TABLE user_settings ADD COLUMN allowed_username VARCHAR(100);`);
+    } catch (e) {
+      // Игнорируем ошибку 42701 (duplicate_column), если колонка уже есть
+    }
+
+    try {
+      await client.query(`ALTER TABLE user_settings ADD COLUMN timer_mode BOOLEAN DEFAULT false;`);
     } catch (e) {
       // Игнорируем ошибку 42701 (duplicate_column), если колонка уже есть
     }
@@ -194,6 +201,25 @@ export const db = {
     await ensureDbInit();
     const res = await pool.query('SELECT allowed_username FROM user_settings WHERE user_id = $1;', [userId]);
     return res.rows[0]?.allowed_username || null;
+  },
+
+  // --- РЕЖИМ "ТАЙМЕР 15 МИН" (переключается кнопкой в меню) ---
+
+  setTimerMode: async (userId, enabled) => {
+    await ensureDbInit();
+    const query = `
+      INSERT INTO user_settings (user_id, timer_mode)
+      VALUES ($1, $2)
+      ON CONFLICT (user_id) 
+      DO UPDATE SET timer_mode = EXCLUDED.timer_mode;
+    `;
+    return pool.query(query, [userId, enabled]);
+  },
+
+  getTimerMode: async (userId) => {
+    await ensureDbInit();
+    const res = await pool.query('SELECT timer_mode FROM user_settings WHERE user_id = $1;', [userId]);
+    return res.rows[0]?.timer_mode === true;
   },
 
   // --- РАБОТА С ПАУЗАМИ ---
