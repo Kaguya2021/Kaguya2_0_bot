@@ -124,6 +124,13 @@ bot.command('start', async (ctx) => {
     db.registerUser(userId, ctx.from.username || ctx.from.first_name).catch(() => {});
   }
 
+  // Убираем старую обычную клавиатуру снизу экрана (осталась с прошлой версии бота).
+  // Отправляем служебное сообщение с remove_keyboard и сразу его удаляем — визуально незаметно.
+  try {
+    const cleanup = await ctx.reply('🧹', { reply_markup: { remove_keyboard: true } });
+    await ctx.api.deleteMessage(ctx.chat.id, cleanup.message_id);
+  } catch (e) {}
+
   const welcomeText = 
     '👋 <b>Привет! Я бот Кагуя 2.0.</b>\n\n' +
     '⚙️ Я работающий автоответчик для вашего Telegram Business!\n\n' +
@@ -513,7 +520,7 @@ bot.callbackQuery('settings_add_account', async (ctx) => {
     'Пример: <code>@kaguya2_0</code>\n\n' +
     'После этого автоответчик будет отвечать только этому аккаунту, всем остальным — нет.\n' +
     'Чтобы отключить ограничение — команда <code>/no us</code>.',
-    {  parse_mode: 'HTML' }
+    { parse_mode: 'HTML' }
   );
 });
 
@@ -740,3 +747,4 @@ bot.on('business_message', async (ctx) => {
     }
   } catch (error) {}
 });
+  
