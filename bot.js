@@ -1,4 +1,4 @@
-import { Bot, InlineKeyboard, Keyboard, GrammyError } from 'grammy';
+import { Bot, InlineKeyboard } from 'grammy';
 import { db } from './database.js';
 import dotenv from 'dotenv';
 
@@ -42,8 +42,8 @@ bot.catch((err) => {
 
 const ADMIN_IDS = ['6511859639', '7470537453'];
 
-const PAUSE_DURATION = 10 * 60 * 1000;    
-const ANTI_SPAM_PAUSE = 3000;          
+const PAUSE_DURATION = 10 * 60 * 1000;
+const AUTO_REPLY_COOLDOWN = 15 * 60 * 1000; // 1 автоответ раз в 15 минут на чат
 const AUTO_OFF_DURATION = 5 * 60 * 1000; 
 
 const processedMessages = new Set();
@@ -52,6 +52,7 @@ const replyCache = new Map();
 const stepState = new Map();
 const autoOffUntil = new Map(); 
 const connectionOwners = new Map();
+const allowedUsernameCache = new Map(); // ownerId -> username (или null)
 
 function isAutoReplyActive(userId) {
   const until = autoOffUntil.get(userId);
@@ -73,23 +74,31 @@ function isAdmin(userId) {
   return ADMIN_IDS.includes(String(userId));
 }
 
-async function getMainKeyboard(userId) {
+// Главное меню теперь строится как inline-кнопки (под сообщением), а не обычная клавиатура
+function getMainInlineKeyboard(userId) {
   const isActive = isAutoReplyActive(userId);
   const statusButtonText = isActive
     ? '🔕 Выключить автоответ (5 мин)'
     : `🔔 Включить автоответ (осталось ${getAutoOffMinutesLeft(userId)} мин)`;
 
-  const kb = new Keyboard()
-    .text(statusButtonText).row()
-    .text('✍️ Установить текст').text('🎤 Голосовой автоответ').row()
-    .text('🖼️ Комбо (Текст + Стикер)').text('🔍 Мой автоответ').row()
-    .text('⏰ Настроить время').text('🗑️ Сбросить').row();
+  const kb = new InlineKeyboard()
+    .text(statusButtonText, 'toggle_autoreply').row()
+    .text('✍️ Установить текст', 'set_text').text('🎤 Голосовой автоответ', 'set_voice').row()
+    .text('🖼️ Комбо (Текст + Стикер)', 'set_combo').text('🔍 Мой автоответ', 'my_reply').row()
+    .text('⏰ Настроить время', 'set_time').text('🗑️ Сбросить', 'reset_reply').row()
+    .text('⚙️ Настройки', 'settings_menu').row();
 
   if (isAdmin(userId)) {
-    kb.text('🔒 ADMINPPA').row();
+    kb.text('🔒 ADMINPPA', 'admin_panel').row();
   }
 
-  return kb.resized();
+  return kb;
+}
+
+function getSettingsInlineKeyboard() {
+  return new InlineKeyboard()
+    .text('➕ Добавить аккаунт', 'settings_add_account').row()
+    .text('⬅️ Назад в меню', 'settings_back');
 }
 
 bot.command('start', async (ctx) => {
@@ -119,7 +128,8 @@ bot.command('start', async (ctx) => {
   });
 
   await ctx.reply('🚀 <b>Главное меню автоответчика:</b>', {
-    reply_markup: await getMainKeyboard(userId)
+    parse_mode: 'HTML',
+    reply_markup: getMainInlineKeyboard(userId)
   });
 });
 
@@ -353,44 +363,42 @@ bot.command('set', async (ctx) => {
   }
 });
 
-bot.hears(/^🔕 Выключить автоответ/, async (ctx) => {
+// ===== ОБРАБОТЧИКИ INLINE-КНОПОК ГЛАВНОГО МЕНЮ =====
+
+bot.callbackQuery('toggle_autoreply', async (ctx) => {
   const userId = String(ctx.from.id);
-  autoOffUntil.set(userId, Date.now() + AUTO_OFF_DURATION);
-  await ctx.reply(
-    '🔕 <b>Автоответчик выключен на 5 минут.</b>\n' +
-    'После этого он автоматически включится обратно. Если нужно включить раньше — нажмите кнопку ниже.',
-    {
-      parse_mode: 'HTML',
-      reply_markup: await getMainKeyboard(userId)
-    }
-  );
+  if (isAutoReplyActive(userId)) {
+    autoOffUntil.set(userId, Date.now() + AUTO_OFF_DURATION);
+    await ctx.answerCallbackQuery({ text: '🔕 Автоответчик выключен на 5 минут' });
+  } else {
+    autoOffUntil.delete(userId);
+    await ctx.answerCallbackQuery({ text: '🔔 Автоответчик включен!' });
+  }
+  try {
+    await ctx.editMessageReplyMarkup({ reply_markup: getMainInlineKeyboard(userId) });
+  } catch (e) {}
 });
 
-bot.hears(/^🔔 Включить автоответ/, async (ctx) => {
-  const userId = String(ctx.from.id);
-  autoOffUntil.delete(userId);
-  await ctx.reply('🔔 <b>Автоответчик включен!</b> Бот снова готов к работе.', {
-    parse_mode: 'HTML',
-    reply_markup: await getMainKeyboard(userId)
-  });
-});
-
-bot.hears('✍️ Установить текст', async (ctx) => {
+bot.callbackQuery('set_text', async (ctx) => {
   stepState.set(String(ctx.from.id), { step: 'WAITING_TEXT_ONLY' });
+  await ctx.answerCallbackQuery();
   await ctx.reply('✍️ <b>Напишите текст автоответа, который вы хотите установить:</b>', { parse_mode: 'HTML' });
 });
 
-bot.hears('🎤 Голосовой автоответ', async (ctx) => {
+bot.callbackQuery('set_voice', async (ctx) => {
   stepState.set(String(ctx.from.id), { step: 'WAITING_VOICE' });
+  await ctx.answerCallbackQuery();
   await ctx.reply('🎤 <b>Отправьте или перешлите мне голосовое сообщение для автоответа:</b>', { parse_mode: 'HTML' });
 });
 
-bot.hears('🖼️ Комбо (Текст + Стикер)', async (ctx) => {
+bot.callbackQuery('set_combo', async (ctx) => {
   stepState.set(String(ctx.from.id), { step: 'WAITING_TEXT' });
+  await ctx.answerCallbackQuery();
   await ctx.reply('✍️ <b>Шаг 1/2:</b> Напишите текст, который должен отправляться со стикером:', { parse_mode: 'HTML' });
 });
 
-bot.hears('🔍 Мой автоответ', async (ctx) => {
+bot.callbackQuery('my_reply', async (ctx) => {
+  await ctx.answerCallbackQuery();
   const userId = String(ctx.from.id);
   const currentReply = replyCache.get(userId) || await db.getCustomReply(userId).catch(() => null);
 
@@ -411,7 +419,8 @@ bot.hears('🔍 Мой автоответ', async (ctx) => {
   await ctx.reply(`✍️ <b>Ваш текущий автоответ:</b>\n\n${escapeHTML(currentReply)}`, { parse_mode: 'HTML' });
 });
 
-bot.hears('🗑️ Сбросить', async (ctx) => {
+bot.callbackQuery('reset_reply', async (ctx) => {
+  await ctx.answerCallbackQuery();
   const userId = String(ctx.from.id);
   replyCache.delete(userId);
   await db.setCustomReply(userId, null).catch((e) => console.error('DB error:', e.message));
@@ -420,7 +429,8 @@ bot.hears('🗑️ Сбросить', async (ctx) => {
   await ctx.reply('🗑️ <b>Ваш автоответ успешно сброшен!</b> Теперь будет отправляться стандартный текст.', { parse_mode: 'HTML' });
 });
 
-bot.hears('⏰ Настроить время', async (ctx) => {
+bot.callbackQuery('set_time', async (ctx) => {
+  await ctx.answerCallbackQuery();
   await ctx.reply(
     '⏰ <b>Настройка рабочего времени:</b>\n\n' +
     'Отправьте команду с желаемым временем.\n' +
@@ -430,27 +440,92 @@ bot.hears('⏰ Настроить время', async (ctx) => {
   );
 });
 
-bot.hears('🔒 ADMINPPA', async (ctx) => {
+bot.callbackQuery('admin_panel', async (ctx) => {
+  await ctx.answerCallbackQuery();
   if (isAdmin(ctx.from.id)) {
     await showAdminPanel(ctx);
   }
 });
 
+// ===== НАСТРОЙКИ: ПРИВЯЗКА АВТООТВЕТА К КОНКРЕТНОМУ АККАУНТУ =====
+
+bot.callbackQuery('settings_menu', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const userId = String(ctx.from.id);
+  let allowedUsername = allowedUsernameCache.get(userId);
+  if (allowedUsername === undefined) {
+    allowedUsername = await db.getAllowedUsername(userId).catch(() => null);
+    allowedUsernameCache.set(userId, allowedUsername);
+  }
+
+  const statusLine = allowedUsername
+    ? `🔗 Сейчас автоответчик работает только для <code>@${escapeHTML(allowedUsername)}</code>.`
+    : '🔓 Сейчас автоответчик работает для всех, без ограничений.';
+
+  await ctx.reply(
+    '⚙️ <b>Настройки</b>\n\n' +
+    'Здесь можно ограничить автоответчик так, чтобы он отвечал только одному конкретному аккаунту.\n\n' +
+    `${statusLine}\n\n` +
+    'Чтобы снять ограничение — отправьте команду <code>/no us</code>.',
+    { parse_mode: 'HTML', reply_markup: getSettingsInlineKeyboard() }
+  );
+});
+
+bot.callbackQuery('settings_add_account', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  stepState.set(String(ctx.from.id), { step: 'WAITING_ACCOUNT' });
+  await ctx.reply(
+    '➕ <b>Добавление аккаунта</b>\n\n' +
+    'Напишите username пользователя, для которого должен работать автоответчик.\n' +
+    'Пример: <code>@kaguya2_0</code>\n\n' +
+    'После этого автоответчик будет отвечать только этому аккаунту, всем остальным — нет.\n' +
+    'Чтобы отключить ограничение — команда <code>/no us</code>.',
+    { parse_mode: 'HTML' }
+  );
+});
+
+bot.callbackQuery('settings_back', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const userId = String(ctx.from.id);
+  await ctx.reply('🚀 <b>Главное меню автоответчика:</b>', {
+    parse_mode: 'HTML',
+    reply_markup: getMainInlineKeyboard(userId)
+  });
+});
+
+bot.command('no', async (ctx) => {
+  const arg = (ctx.match || '').trim().toLowerCase();
+  if (arg !== 'us') {
+    return await ctx.reply('❌ Использование: <code>/no us</code> — снять ограничение по аккаунту.', { parse_mode: 'HTML' });
+  }
+  const userId = String(ctx.from.id);
+  allowedUsernameCache.set(userId, null);
+  await db.setAllowedUsername(userId, null).catch((e) => console.error('DB error:', e.message));
+  stepState.delete(userId);
+  await ctx.reply('✅ <b>Ограничение по аккаунту снято.</b> Автоответчик снова работает для всех.', { parse_mode: 'HTML' });
+});
+
 bot.on('message', async (ctx, next) => {
   if (ctx.businessMessage) return next();
 
-  const menuButtons = [
-    '🔕 Выключить автоответ', '🔔 Включить автоответ', 
-    '✍️ Установить текст', '🎤 Голосовой автоответ', 
-    '🖼️ Комбо (Текст + Стикер)', '🔍 Мой автоответ', 
-    '⏰ Настроить время', '🗑️ Сбросить', '🔒 ADMINPPA'
-  ];
-  if (ctx.message.text && menuButtons.some(btn => ctx.message.text.startsWith(btn))) {
-    return next();
-  }
-
   const userId = String(ctx.from.id);
   const state = stepState.get(userId);
+
+  if (state && state.step === 'WAITING_ACCOUNT' && ctx.message.text) {
+    const raw = ctx.message.text.trim().replace(/^@/, '');
+    if (!raw) {
+      return await ctx.reply('❌ Отправьте корректный username, например: <code>@kaguya2_0</code>', { parse_mode: 'HTML' });
+    }
+    const username = raw.toLowerCase();
+    allowedUsernameCache.set(userId, username);
+    await db.setAllowedUsername(userId, username).catch((e) => console.error('DB error:', e.message));
+    stepState.delete(userId);
+    return await ctx.reply(
+      `✅ <b>Готово!</b> Автоответчик теперь работает только в переписке с <code>@${escapeHTML(username)}</code>.\n\n` +
+      'Чтобы снять ограничение, отправьте команду <code>/no us</code>.',
+      { parse_mode: 'HTML' }
+    );
+  }
 
   if (state && state.step === 'WAITING_TEXT_ONLY' && ctx.message.text) {
     const text = ctx.message.text;
@@ -568,13 +643,27 @@ bot.on('business_message', async (ctx) => {
       return;
     }
 
+    // Ограничение автоответа на конкретный аккаунт (настраивается в "⚙️ Настройки")
+    let allowedUsername = allowedUsernameCache.get(ownerId);
+    if (allowedUsername === undefined) {
+      allowedUsername = await db.getAllowedUsername(ownerId).catch(() => null);
+      allowedUsernameCache.set(ownerId, allowedUsername);
+    }
+    if (allowedUsername) {
+      const senderUsername = (businessMessage.from.username || '').toLowerCase();
+      if (senderUsername !== allowedUsername) return;
+    }
+
     const localPauseUntil = localPauses.get(chatId);
     if (localPauseUntil && localPauseUntil > Date.now()) return;
 
     if (await db.isPaused?.(chatId).catch(() => false)) return;
     if (!(await isWithinWorkingHours(ownerId))) return;
 
-    localPauses.set(chatId, Date.now() + ANTI_SPAM_PAUSE);
+    // После отправки автоответа ставим паузу на 15 минут для этого чата.
+    // Новое сообщение в течение 15 минут не вызовет повторный автоответ;
+    // после истечения 15 минут следующее сообщение снова запустит автоответ и таймер обновится.
+    localPauses.set(chatId, Date.now() + AUTO_REPLY_COOLDOWN);
 
     let replyText = replyCache.get(ownerId);
     if (!replyText) {
