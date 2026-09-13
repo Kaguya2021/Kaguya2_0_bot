@@ -31,13 +31,20 @@ async function ensureDbInit() {
         custom_reply TEXT,
         start_time VARCHAR(10),
         end_time VARCHAR(10),
-        reply_mode VARCHAR(20) DEFAULT 'always'
+        reply_mode VARCHAR(20) DEFAULT 'always',
+        allowed_username VARCHAR(100)
       );
     `);
 
     // Безопасное добавление колонки, если таблица уже была создана ранее
     try {
       await client.query(`ALTER TABLE user_settings ADD COLUMN reply_mode VARCHAR(20) DEFAULT 'always';`);
+    } catch (e) {
+      // Игнорируем ошибку 42701 (duplicate_column), если колонка уже есть
+    }
+
+    try {
+      await client.query(`ALTER TABLE user_settings ADD COLUMN allowed_username VARCHAR(100);`);
     } catch (e) {
       // Игнорируем ошибку 42701 (duplicate_column), если колонка уже есть
     }
@@ -168,6 +175,25 @@ export const db = {
     const res = await pool.query('SELECT reply_mode FROM user_settings WHERE user_id = $1;', [userId]);
     // Возвращаем 'always' по умолчанию, если ничего не найдено
     return res.rows[0]?.reply_mode || 'always';
+  },
+
+  // --- ПРИВЯЗКА АВТООТВЕТА К КОНКРЕТНОМУ АККАУНТУ (НОВОЕ) ---
+
+  setAllowedUsername: async (userId, username) => {
+    await ensureDbInit();
+    const query = `
+      INSERT INTO user_settings (user_id, allowed_username)
+      VALUES ($1, $2)
+      ON CONFLICT (user_id) 
+      DO UPDATE SET allowed_username = EXCLUDED.allowed_username;
+    `;
+    return pool.query(query, [userId, username]);
+  },
+
+  getAllowedUsername: async (userId) => {
+    await ensureDbInit();
+    const res = await pool.query('SELECT allowed_username FROM user_settings WHERE user_id = $1;', [userId]);
+    return res.rows[0]?.allowed_username || null;
   },
 
   // --- РАБОТА С ПАУЗАМИ ---
