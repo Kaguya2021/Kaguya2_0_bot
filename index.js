@@ -32,18 +32,32 @@ app.get('/', (req, res) => {
 app.post('/api/webhook', webhookCallback(bot, 'express'));
 
 const PORT = process.env.PORT || 3000;
-const RENDER_URL = process.env.RENDER_EXTERNAL_URL || 'https://kaguya2-0-bot-say4.onrender.com';
+// Render сам подставляет RENDER_EXTERNAL_URL для каждого веб-сервиса.
+// Если переменная почему-то не пришла — используем актуальный адрес этого сервиса
+// (раньше тут был захардкожен старый/чужой домен, из-за чего вебхук не ставился).
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL || 'https://kaguya2-0-bot-clhl.onrender.com';
 
-app.listen(PORT, async () => {
-  console.log(`🚀 Сервер слушает порт ${PORT}`);
-
+async function setWebhookWithRetry(webhookUrl, attempt = 1) {
   try {
-    const webhookUrl = `${RENDER_URL}/api/webhook`;
     await bot.api.setWebhook(webhookUrl);
     console.log(`🔗 Webhook успешно установлен на: ${webhookUrl}`);
   } catch (err) {
-    console.error('❌ Ошибка при установке Webhook:', err.message);
+    console.error(`❌ Ошибка при установке Webhook (попытка ${attempt}):`, err.message);
+    if (attempt < 5) {
+      const delay = attempt * 3000;
+      setTimeout(() => setWebhookWithRetry(webhookUrl, attempt + 1), delay);
+    } else {
+      console.error('❌ Не удалось установить Webhook после нескольких попыток. Проверьте BOT_TOKEN и RENDER_URL.');
+    }
   }
+}
+
+app.listen(PORT, () => {
+  console.log(`🚀 Сервер слушает порт ${PORT}`);
+  console.log(`🌐 Используемый адрес хоста: ${RENDER_URL}`);
+
+  const webhookUrl = `${RENDER_URL}/api/webhook`;
+  setWebhookWithRetry(webhookUrl);
 });
 
 export default app;
