@@ -1,27 +1,40 @@
 import express from 'express';
-import { bot } from './bot.js'; // Убедись, что путь к bot.js указан верно
+import { bot } from './bot.js';
 import { webhookCallback } from 'grammy';
 
 const app = express();
 
 app.use(express.json());
 
-// 1. Маршрут для Health Check / Пингера (отдаёт 200 OK вместо 404)
+// 1. Маршрут для проверки работоспособности (Health Check)
 app.get('/', (req, res) => {
   res.status(200).send('Bot is active and running!');
 });
 
-// 2. Обработчик вебхука Telegram
-app.use('/api/webhook', webhookCallback(bot, 'express'));
+// Инициализируем бота перед привязкой вебхука
+async function startServer() {
+  try {
+    // Получаем информацию о боте от Telegram API
+    await bot.init();
+    console.log(`Бот @${bot.botInfo.username} успешно инициализирован`);
 
-// 3. Запуск веб-сервера
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Сервер запущен на порту ${PORT}`);
-});
+    // 2. Обработчик вебхука Telegram
+    app.use('/api/webhook', webhookCallback(bot, 'express'));
 
-// 4. Защита от падения процесса при необработанных ошибках
-process.on('unhandledRejection', (reason, promise) => {
+    // 3. Запуск веб-сервера
+    const PORT = process.env.PORT || 10000;
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Сервер запущен на порту ${PORT}`);
+    });
+  } catch (error) {
+    console.error('Ошибка при запуске бота:', error);
+  }
+}
+
+startServer();
+
+// 4. Защита от падения процесса
+process.on('unhandledRejection', (reason) => {
   console.error('Unhandled Rejection:', reason);
 });
 
