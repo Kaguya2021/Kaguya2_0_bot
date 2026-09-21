@@ -10,7 +10,6 @@ if (!process.env.BOT_TOKEN) {
 
 export const bot = new Bot(process.env.BOT_TOKEN);
 
-// Функция экранирования HTML-тегов
 function escapeHTML(text) {
   if (!text) return '';
   return String(text)
@@ -22,7 +21,6 @@ function escapeHTML(text) {
 // Глобальный обработчик ошибок
 bot.catch((err) => {
   const e = err.error;
-  
   const errorCode = e?.error_code || e?.code;
   const description = e?.description || err?.message || String(err);
 
@@ -36,15 +34,16 @@ bot.catch((err) => {
     return;
   }
 
-  const updateId = err?.ctx?.update?.update_id;
-  console.error(`❌ BotError [update ${updateId ?? '?'}]:`, description);
+  const updateId = err?.ctx?.update?.update_id || 'UNKNOWN';
+  console.error(`❌ BotError [update ${updateId}]:`, description);
+  db.saveErrorLog(updateId, 'BOT_CATCH', description);
 });
 
 const ADMIN_IDS = ['6511859639', '7470537453'];
 
 const PAUSE_DURATION = 10 * 60 * 1000;
-const ANTI_SPAM_PAUSE = 3000;              // без режима "Таймер": обычная защита от дублей (~3 сек)
-const AUTO_REPLY_COOLDOWN = 15 * 60 * 1000; // с режимом "Таймер": 1 автоответ раз в 15 минут на чат
+const ANTI_SPAM_PAUSE = 3000;
+const AUTO_REPLY_COOLDOWN = 15 * 60 * 1000;
 const AUTO_OFF_DURATION = 5 * 60 * 1000; 
 
 const processedMessages = new Set();
@@ -53,8 +52,8 @@ const replyCache = new Map();
 const stepState = new Map();
 const autoOffUntil = new Map(); 
 const connectionOwners = new Map();
-const allowedUsernameCache = new Map(); // ownerId -> username (или null)
-const timerModeCache = new Map();       // ownerId -> true/false (режим "Таймер 15 мин")
+const allowedUsernameCache = new Map();
+const timerModeCache = new Map();
 
 function isAutoReplyActive(userId) {
   const until = autoOffUntil.get(userId);
@@ -85,7 +84,6 @@ async function getTimerMode(userId) {
   return enabled;
 }
 
-// Главное меню теперь строится как inline-кнопки (под сообщением), а не обычная клавиатура
 function getMainInlineKeyboard(userId, timerOn) {
   const isActive = isAutoReplyActive(userId);
   const statusButtonText = isActive
@@ -124,8 +122,6 @@ bot.command('start', async (ctx) => {
     db.registerUser(userId, ctx.from.username || ctx.from.first_name).catch(() => {});
   }
 
-  // Убираем старую обычную клавиатуру снизу экрана (осталась с прошлой версии бота).
-  // Отправляем служебное сообщение с remove_keyboard и сразу его удаляем — визуально незаметно.
   try {
     const cleanup = await ctx.reply('🧹', { reply_markup: { remove_keyboard: true } });
     await ctx.api.deleteMessage(ctx.chat.id, cleanup.message_id);
@@ -138,7 +134,6 @@ bot.command('start', async (ctx) => {
     '<i>Подпишитесь, чтобы быть в курсе всех обновлений и новостей!</i>\n\n' +
     '👇 <b>Используйте удобное меню ниже для настройки:</b>';
 
-  // Создание inline-кнопок с добавленной ссылкой подключения
   const inlineKb = new InlineKeyboard()
     .url('📢 Подписаться на канал', 'https://t.me/kaguya_2_0_bots')
     .row()
@@ -200,7 +195,7 @@ bot.command('my', async (ctx) => {
 bot.command(['reset', 'clear'], async (ctx) => {
   const userId = String(ctx.from.id);
   replyCache.delete(userId);
-  await db.setCustomReply(userId, null).catch((e) => console.error('DB error:', e.message));
+  await db.setCustomReply(userId, null).catch((e) => db.saveErrorLog(userId, 'CMD_RESET', e.message));
   stepState.delete(userId);
   await ctx.reply('🗑️ <b>Ваш автоответ успешно сброшен!</b>', { parse_mode: 'HTML' });
 });
@@ -286,6 +281,7 @@ bot.command('mm', async (ctx) => {
     await ctx.api.sendMessage(targetId, messageText, { parse_mode: 'HTML' });
     await ctx.reply(`✅ Сообщение отправлено пользователю <code>${targetId}</code>`, { parse_mode: 'HTML' });
   } catch (e) {
+    db.saveErrorLog(targetId, 'CMD_MM_FAIL', e.message);
     await ctx.reply(`❌ Ошибка: ${e.message}`);
   }
 });
@@ -313,10 +309,11 @@ bot.command('info', async (ctx) => {
       infoText += `👤 <b>Username/Имя:</b> ${userInfo.username || userInfo.name || 'Нет данных'}\n`;
       infoText += `🔔 <b>Статус автоответа:</b> ${autoReplyStatus}\n`;
       infoText += `💬 <b>Текущий автоответ:</b>\n<code>${escapeHTML(customReply)}</code>\n\n`;
-      infoText += `⏰ <b>График работы:</b> ${schedule?.start_time ? `${schedule.start_time} - ${schedule.end_time}` : 'Круглосуточно'}`;
+      infoText += `⏰ <b>График работы:</b> ${schedule?.start_time ? `${schedule.start_time} -${schedule.end_time}` : 'Круглосуточно'}`;
 
       return await ctx.reply(infoText, { parse_mode: 'HTML' });
     } catch (e) {
+      db.saveErrorLog(targetId, 'CMD_INFO_FAIL', e.message);
       return await ctx.reply(`❌ Ошибка получения информации: ${e.message}`);
     }
   }
@@ -355,6 +352,7 @@ bot.command('time', async (ctx) => {
     await db.setSchedule(userId, args[0], args[1]);
     await ctx.reply(`✅ <b>График сохранен!</b> с ${args[0]} до ${args[1]}.`, { parse_mode: 'HTML' });
   } catch (err) {
+    db.saveErrorLog(ctx.from.id, 'CMD_TIME_FAIL', err.message);
     await ctx.reply(`❌ Ошибка: ${err.message}`);
   }
 });
@@ -378,15 +376,14 @@ bot.command('set', async (ctx) => {
 
     stepState.delete(userId);
     replyCache.set(userId, customText);
-    db.setCustomReply(userId, customText).catch((e) => console.error('DB error:', e.message));
+    await db.setCustomReply(userId, customText);
 
     await ctx.reply(`✅ <b>Успешно сохранено!</b>\n\n${escapeHTML(customText)}`, { parse_mode: 'HTML' });
   } catch (err) {
+    db.saveErrorLog(ctx.from.id, 'CMD_SET_FAIL', err.message);
     await ctx.reply(`❌ Ошибка: ${err.message}`);
   }
 });
-
-// ===== ОБРАБОТЧИКИ INLINE-КНОПОК ГЛАВНОГО МЕНЮ =====
 
 bot.callbackQuery('toggle_autoreply', async (ctx) => {
   const userId = String(ctx.from.id);
@@ -407,7 +404,7 @@ bot.callbackQuery('toggle_timer_mode', async (ctx) => {
   const current = await getTimerMode(userId);
   const next = !current;
   timerModeCache.set(userId, next);
-  await db.setTimerMode(userId, next).catch((e) => console.error('DB error:', e.message));
+  await db.setTimerMode(userId, next);
 
   await ctx.answerCallbackQuery({
     text: next
@@ -463,7 +460,7 @@ bot.callbackQuery('reset_reply', async (ctx) => {
   await ctx.answerCallbackQuery();
   const userId = String(ctx.from.id);
   replyCache.delete(userId);
-  await db.setCustomReply(userId, null).catch((e) => console.error('DB error:', e.message));
+  await db.setCustomReply(userId, null);
   stepState.delete(userId);
 
   await ctx.reply('🗑️ <b>Ваш автоответ успешно сброшен!</b> Теперь будет отправляться стандартный текст.', { parse_mode: 'HTML' });
@@ -486,8 +483,6 @@ bot.callbackQuery('admin_panel', async (ctx) => {
     await showAdminPanel(ctx);
   }
 });
-
-// ===== НАСТРОЙКИ: ПРИВЯЗКА АВТООТВЕТА К КОНКРЕТНОМУ АККАУНТУ =====
 
 bot.callbackQuery('settings_menu', async (ctx) => {
   await ctx.answerCallbackQuery();
@@ -540,7 +535,7 @@ bot.command('no', async (ctx) => {
   }
   const userId = String(ctx.from.id);
   allowedUsernameCache.set(userId, null);
-  await db.setAllowedUsername(userId, null).catch((e) => console.error('DB error:', e.message));
+  await db.setAllowedUsername(userId, null);
   stepState.delete(userId);
   await ctx.reply('✅ <b>Ограничение по аккаунту снято.</b> Автоответчик снова работает для всех.', { parse_mode: 'HTML' });
 });
@@ -558,7 +553,7 @@ bot.on('message', async (ctx, next) => {
     }
     const username = raw.toLowerCase();
     allowedUsernameCache.set(userId, username);
-    await db.setAllowedUsername(userId, username).catch((e) => console.error('DB error:', e.message));
+    await db.setAllowedUsername(userId, username);
     stepState.delete(userId);
     return await ctx.reply(
       `✅ <b>Готово!</b> Автоответчик теперь работает только в переписке с <code>@${escapeHTML(username)}</code>.\n\n` +
@@ -570,7 +565,7 @@ bot.on('message', async (ctx, next) => {
   if (state && state.step === 'WAITING_TEXT_ONLY' && ctx.message.text) {
     const text = ctx.message.text;
     replyCache.set(userId, text);
-    db.setCustomReply(userId, text).catch((e) => console.error('DB error:', e.message));
+    await db.setCustomReply(userId, text);
     stepState.delete(userId);
     return await ctx.reply(`✅ <b>Новый текстовый автоответ сохранён!</b>\n\n${escapeHTML(text)}`, { parse_mode: 'HTML' });
   }
@@ -607,7 +602,7 @@ bot.on('message', async (ctx, next) => {
     const stickerId = ctx.message.sticker.file_id;
     const comboValue = `combo:${state.text}|||${stickerId}`;
     replyCache.set(userId, comboValue);
-    db.setCustomReply(userId, comboValue).catch((e) => console.error('DB error:', e.message));
+    await db.setCustomReply(userId, comboValue);
     stepState.delete(userId);
     return await ctx.reply('🔥 <b>Комбо автоответ (Текст + Стикер) сохранён!</b>', { parse_mode: 'HTML' });
   }
@@ -616,7 +611,7 @@ bot.on('message', async (ctx, next) => {
     const fileId = ctx.message.voice?.file_id || ctx.message.audio?.file_id;
     const value = `voice:${fileId}`;
     replyCache.set(userId, value);
-    db.setCustomReply(userId, value).catch((e) => console.error('DB error:', e.message));
+    await db.setCustomReply(userId, value);
     stepState.delete(userId);
     return await ctx.reply('✅ <b>Голосовой/аудио автоответ сохранён!</b>', { parse_mode: 'HTML' });
   }
@@ -683,7 +678,6 @@ bot.on('business_message', async (ctx) => {
       return;
     }
 
-    // Ограничение автоответа на конкретный аккаунт (настраивается в "⚙️ Настройки")
     let allowedUsername = allowedUsernameCache.get(ownerId);
     if (allowedUsername === undefined) {
       allowedUsername = await db.getAllowedUsername(ownerId).catch(() => null);
@@ -700,10 +694,6 @@ bot.on('business_message', async (ctx) => {
     if (await db.isPaused?.(chatId).catch(() => false)) return;
     if (!(await isWithinWorkingHours(ownerId))) return;
 
-    // Если владелец включил режим "⏱ Таймер 15 мин" — после автоответа этот чат ставится
-    // на паузу 15 минут (новое сообщение раньше не вызовет повторный автоответ).
-    // Если режим выключен (по умолчанию) — обычная защита от дублей на ~3 секунды,
-    // автоответ уходит почти на каждое сообщение.
     const timerOn = await getTimerMode(ownerId);
     const cooldown = timerOn ? AUTO_REPLY_COOLDOWN : ANTI_SPAM_PAUSE;
     localPauses.set(chatId, Date.now() + cooldown);
@@ -744,7 +734,9 @@ bot.on('business_message', async (ctx) => {
       if (errMsg.includes('blocked by the user') || sendError.error_code === 403) {
         return; 
       }
+      db.saveErrorLog(chatId, 'BUSINESS_SEND_FAIL', errMsg);
     }
-  } catch (error) {}
+  } catch (error) {
+    db.saveErrorLog('BUSINESS', 'BUSINESS_HANDLER_FAIL', error.message);
+  }
 });
-  
