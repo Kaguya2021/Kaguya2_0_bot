@@ -5,7 +5,6 @@ dotenv.config();
 
 const { Pool } = pg;
 
-// Создаем пул соединений с таймаутом
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
@@ -16,7 +15,6 @@ const pool = new Pool({
   max: 10
 });
 
-// Безопасная инициализация таблиц без падения сервера
 let isDbInitialized = false;
 
 async function ensureDbInit() {
@@ -24,7 +22,6 @@ async function ensureDbInit() {
   try {
     const client = await pool.connect();
     
-    // Таблица настроек пользователей (ДОБАВЛЕН reply_mode)
     await client.query(`
       CREATE TABLE IF NOT EXISTS user_settings (
         user_id VARCHAR(50) PRIMARY KEY,
@@ -35,67 +32,40 @@ async function ensureDbInit() {
         allowed_username VARCHAR(100),
         timer_mode BOOLEAN DEFAULT false
       );
-    `);
 
-    // Безопасное добавление колонки, если таблица уже была создана ранее
-    try {
-      await client.query(`ALTER TABLE user_settings ADD COLUMN reply_mode VARCHAR(20) DEFAULT 'always';`);
-    } catch (e) {
-      // Игнорируем ошибку 42701 (duplicate_column), если колонка уже есть
-    }
+      ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS reply_mode VARCHAR(20) DEFAULT 'always';
+      ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS allowed_username VARCHAR(100);
+      ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS timer_mode BOOLEAN DEFAULT false;
 
-    try {
-      await client.query(`ALTER TABLE user_settings ADD COLUMN allowed_username VARCHAR(100);`);
-    } catch (e) {
-      // Игнорируем ошибку 42701 (duplicate_column), если колонка уже есть
-    }
-
-    try {
-      await client.query(`ALTER TABLE user_settings ADD COLUMN timer_mode BOOLEAN DEFAULT false;`);
-    } catch (e) {
-      // Игнорируем ошибку 42701 (duplicate_column), если колонка уже есть
-    }
-
-    // Таблица зарегистрированных пользователей (для рассылок)
-    await client.query(`
       CREATE TABLE IF NOT EXISTS users (
         user_id VARCHAR(50) PRIMARY KEY,
         username VARCHAR(100),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
-    `);
 
-    // Таблица паузы чатов
-    await client.query(`
       CREATE TABLE IF NOT EXISTS chat_pauses (
         chat_id VARCHAR(50) PRIMARY KEY,
         pause_until BIGINT
       );
-    `);
 
-    // Таблица логов сообщений и ошибок
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS message_logs (
+      CREATE TABLE IF NOT EXISTS error_logs (
         id SERIAL PRIMARY KEY,
         chat_id VARCHAR(50),
-        role VARCHAR(20),
-        content TEXT,
+        error_type VARCHAR(50),
+        details TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
 
     client.release();
     isDbInitialized = true;
-    console.log('✅ База данных готова к работе');
   } catch (err) {
-    console.error('⚠️ Ошибка инициализации БД (работаем в режиме памяти):', err.message);
+    console.error('❌ Ошибка инициализации БД:', err.message);
   }
 }
 
 export const db = {
   // --- АДМИН И РЕГИСТРАЦИЯ ЮЗЕРОВ ---
-  
-  // 1. Регистрация / Обновление юзера
   registerUser: async (userId, username) => {
     await ensureDbInit();
     const query = `
@@ -104,10 +74,9 @@ export const db = {
       ON CONFLICT (user_id) 
       DO UPDATE SET username = EXCLUDED.username;
     `;
-    return pool.query(query, [userId, username]);
+    return pool.query(query, [userId, username]).catch((e) => db.saveErrorLog(userId, 'DB_REGISTER_USER', e.message));
   },
 
-  // 2. Получение ВСЕХ юзеров для рассылки (/post и /m)
   getAllUsers: async () => {
     await ensureDbInit();
     const query = `
@@ -117,19 +86,23 @@ export const db = {
         SELECT user_id FROM user_settings
       ) AS combined_users;
     `;
-    const res = await pool.query(query);
+    const res = await pool.query(query).catch((e) => {
+      db.saveErrorLog('SYSTEM', 'DB_GET_ALL_USERS', e.message);
+      return { rows: [] };
+    });
     return res.rows;
   },
 
-  // 3. Получение подробной информации для команды /info <id>
   getUserInfo: async (userId) => {
     await ensureDbInit();
-    const res = await pool.query('SELECT username, created_at FROM users WHERE user_id = $1;', [userId]);
+    const res = await pool.query('SELECT username, created_at FROM users WHERE user_id = $1;', [userId]).catch((e) => {
+      db.saveErrorLog(userId, 'DB_GET_USER_INFO', e.message);
+      return { rows: [] };
+    });
     return res.rows[0] || null;
   },
 
   // --- НАСТРОЙКИ АВТООТВЕТА ---
-
   setCustomReply: async (userId, reply) => {
     await ensureDbInit();
     const query = `
@@ -138,12 +111,15 @@ export const db = {
       ON CONFLICT (user_id) 
       DO UPDATE SET custom_reply = EXCLUDED.custom_reply;
     `;
-    return pool.query(query, [userId, reply]);
+    return pool.query(query, [userId, reply]).catch((e) => db.saveErrorLog(userId, 'DB_SET_CUSTOM_REPLY', e.message));
   },
 
   getCustomReply: async (userId) => {
     await ensureDbInit();
-    const res = await pool.query('SELECT custom_reply FROM user_settings WHERE user_id = $1;', [userId]);
+    const res = await pool.query('SELECT custom_reply FROM user_settings WHERE user_id = $1;', [userId]).catch((e) => {
+      db.saveErrorLog(userId, 'DB_GET_CUSTOM_REPLY', e.message);
+      return { rows: [] };
+    });
     return res.rows[0]?.custom_reply || null;
   },
 
@@ -155,36 +131,17 @@ export const db = {
       ON CONFLICT (user_id) 
       DO UPDATE SET start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time;
     `;
-    return pool.query(query, [userId, startTime, endTime]);
+    return pool.query(query, [userId, startTime, endTime]).catch((e) => db.saveErrorLog(userId, 'DB_SET_SCHEDULE', e.message));
   },
 
   getSchedule: async (userId) => {
     await ensureDbInit();
-    const res = await pool.query('SELECT start_time, end_time FROM user_settings WHERE user_id = $1;', [userId]);
+    const res = await pool.query('SELECT start_time, end_time FROM user_settings WHERE user_id = $1;', [userId]).catch((e) => {
+      db.saveErrorLog(userId, 'DB_GET_SCHEDULE', e.message);
+      return { rows: [] };
+    });
     return res.rows[0] || null;
   },
-
-  // --- НАСТРОЙКИ РЕЖИМА АВТООТВЕТА (НОВОЕ) ---
-  
-  setReplyMode: async (userId, mode) => {
-    await ensureDbInit();
-    const query = `
-      INSERT INTO user_settings (user_id, reply_mode)
-      VALUES ($1, $2)
-      ON CONFLICT (user_id) 
-      DO UPDATE SET reply_mode = EXCLUDED.reply_mode;
-    `;
-    return pool.query(query, [userId, mode]);
-  },
-
-  getReplyMode: async (userId) => {
-    await ensureDbInit();
-    const res = await pool.query('SELECT reply_mode FROM user_settings WHERE user_id = $1;', [userId]);
-    // Возвращаем 'always' по умолчанию, если ничего не найдено
-    return res.rows[0]?.reply_mode || 'always';
-  },
-
-  // --- ПРИВЯЗКА АВТООТВЕТА К КОНКРЕТНОМУ АККАУНТУ (НОВОЕ) ---
 
   setAllowedUsername: async (userId, username) => {
     await ensureDbInit();
@@ -194,16 +151,17 @@ export const db = {
       ON CONFLICT (user_id) 
       DO UPDATE SET allowed_username = EXCLUDED.allowed_username;
     `;
-    return pool.query(query, [userId, username]);
+    return pool.query(query, [userId, username]).catch((e) => db.saveErrorLog(userId, 'DB_SET_ALLOWED_USERNAME', e.message));
   },
 
   getAllowedUsername: async (userId) => {
     await ensureDbInit();
-    const res = await pool.query('SELECT allowed_username FROM user_settings WHERE user_id = $1;', [userId]);
+    const res = await pool.query('SELECT allowed_username FROM user_settings WHERE user_id = $1;', [userId]).catch((e) => {
+      db.saveErrorLog(userId, 'DB_GET_ALLOWED_USERNAME', e.message);
+      return { rows: [] };
+    });
     return res.rows[0]?.allowed_username || null;
   },
-
-  // --- РЕЖИМ "ТАЙМЕР 15 МИН" (переключается кнопкой в меню) ---
 
   setTimerMode: async (userId, enabled) => {
     await ensureDbInit();
@@ -213,51 +171,35 @@ export const db = {
       ON CONFLICT (user_id) 
       DO UPDATE SET timer_mode = EXCLUDED.timer_mode;
     `;
-    return pool.query(query, [userId, enabled]);
+    return pool.query(query, [userId, enabled]).catch((e) => db.saveErrorLog(userId, 'DB_SET_TIMER_MODE', e.message));
   },
 
   getTimerMode: async (userId) => {
     await ensureDbInit();
-    const res = await pool.query('SELECT timer_mode FROM user_settings WHERE user_id = $1;', [userId]);
+    const res = await pool.query('SELECT timer_mode FROM user_settings WHERE user_id = $1;', [userId]).catch((e) => {
+      db.saveErrorLog(userId, 'DB_GET_TIMER_MODE', e.message);
+      return { rows: [] };
+    });
     return res.rows[0]?.timer_mode === true;
-  },
-
-  // --- РАБОТА С ПАУЗАМИ ---
-
-  setPause: async (chatId, durationMs) => {
-    await ensureDbInit();
-    const pauseUntil = Date.now() + durationMs;
-    const query = `
-      INSERT INTO chat_pauses (chat_id, pause_until)
-      VALUES ($1, $2)
-      ON CONFLICT (chat_id) 
-      DO UPDATE SET pause_until = EXCLUDED.pause_until;
-    `;
-    return pool.query(query, [chatId, pauseUntil]);
-  },
-
-  removePause: async (chatId) => {
-    await ensureDbInit();
-    const query = `DELETE FROM chat_pauses WHERE chat_id = $1;`;
-    return pool.query(query, [chatId]);
   },
 
   isPaused: async (chatId) => {
     await ensureDbInit();
-    const res = await pool.query('SELECT pause_until FROM chat_pauses WHERE chat_id = $1;', [chatId]);
+    const res = await pool.query('SELECT pause_until FROM chat_pauses WHERE chat_id = $1;', [chatId]).catch((e) => {
+      db.saveErrorLog(chatId, 'DB_IS_PAUSED', e.message);
+      return { rows: [] };
+    });
     if (!res.rows[0]) return false;
     return Number(res.rows[0].pause_until) > Date.now();
   },
 
-  // --- ЭКОНОМНОЕ ЛОГИРОВАНИЕ (ТОЛЬКО ОШИБКИ И БАНЫ) ---
-  
+  // --- ТОЛЬКО ЛОГИ ОШИБОК ---
   saveErrorLog: async (chatId, errorType, errorDetails) => {
     await ensureDbInit();
     const query = `
-      INSERT INTO message_logs (chat_id, role, content)
+      INSERT INTO error_logs (chat_id, error_type, details)
       VALUES ($1, $2, $3);
     `;
-    const message = `[${errorType}] ${errorDetails}`;
-    return pool.query(query, [chatId, 'error', message]).catch(console.error);
+    return pool.query(query, [String(chatId), String(errorType), String(errorDetails)]).catch(() => {});
   }
 };
