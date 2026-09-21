@@ -1,50 +1,30 @@
 import express from 'express';
+import { bot } from './bot.js'; // Убедись, что путь к bot.js указан верно
 import { webhookCallback } from 'grammy';
-import { bot } from './bot.js';
-import { db } from './database.js';
 
 const app = express();
+
 app.use(express.json());
 
-// Подавление ошибок блокировки и запись неожиданных отказов в БД
-process.on('unhandledRejection', (reason) => {
-  const msg = reason?.message || String(reason);
-  if (
-    reason?.error_code === 403 ||
-    msg.includes('blocked by the user') ||
-    msg.includes('user is deactivated')
-  ) {
-    return;
-  }
-  console.error('Unhandled Rejection:', reason);
-  db.saveErrorLog('SYSTEM', 'UNHANDLED_REJECTION', msg);
-});
-
-// Роут статуса для внешнего мониторинга
-app.get('/ping', (req, res) => {
-  res.status(200).send('pong');
-});
-
+// 1. Маршрут для Health Check / Пингера (отдаёт 200 OK вместо 404)
 app.get('/', (req, res) => {
-  res.send('Кагуя успешно запущена на Render!');
+  res.status(200).send('Bot is active and running!');
 });
 
-app.post('/api/webhook', webhookCallback(bot, 'express'));
+// 2. Обработчик вебхука Telegram
+app.use('/api/webhook', webhookCallback(bot, 'express'));
 
-const PORT = process.env.PORT || 3000;
-const RENDER_URL = process.env.RENDER_EXTERNAL_URL || 'https://kaguya2-0-bot-say4.onrender.com';
-
-app.listen(PORT, async () => {
-  console.log(`🚀 Сервер слушает порт ${PORT}`);
-
-  try {
-    const webhookUrl = `${RENDER_URL}/api/webhook`;
-    await bot.api.setWebhook(webhookUrl);
-    console.log(`🔗 Webhook успешно установлен на: ${webhookUrl}`);
-  } catch (err) {
-    console.error('❌ Ошибка при установке Webhook:', err.message);
-    db.saveErrorLog('SYSTEM', 'WEBHOOK_SETUP_FAIL', err.message);
-  }
+// 3. Запуск веб-сервера
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Сервер запущен на порту ${PORT}`);
 });
 
-export default app;
+// 4. Защита от падения процесса при необработанных ошибках
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+});
