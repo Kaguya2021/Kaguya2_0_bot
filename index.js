@@ -1,11 +1,12 @@
 import express from 'express';
 import { webhookCallback } from 'grammy';
 import { bot } from './bot.js';
+import { db } from './database.js';
 
 const app = express();
 app.use(express.json());
 
-// Подавляет вывод 403 ошибок в консоль
+// Подавление ошибок блокировки и запись неожиданных отказов в БД
 process.on('unhandledRejection', (reason) => {
   const msg = reason?.message || String(reason);
   if (
@@ -16,19 +17,18 @@ process.on('unhandledRejection', (reason) => {
     return;
   }
   console.error('Unhandled Rejection:', reason);
+  db.saveErrorLog('SYSTEM', 'UNHANDLED_REJECTION', msg);
 });
 
-// Эндпоинт для вашей внешней бот-пинговалки
+// Роут статуса для внешнего мониторинга
 app.get('/ping', (req, res) => {
   res.status(200).send('pong');
 });
 
-// Главная страница проверки статуса
 app.get('/', (req, res) => {
   res.send('Кагуя успешно запущена на Render!');
 });
 
-// Обработчик вебхука от Telegram
 app.post('/api/webhook', webhookCallback(bot, 'express'));
 
 const PORT = process.env.PORT || 3000;
@@ -43,6 +43,7 @@ app.listen(PORT, async () => {
     console.log(`🔗 Webhook успешно установлен на: ${webhookUrl}`);
   } catch (err) {
     console.error('❌ Ошибка при установке Webhook:', err.message);
+    db.saveErrorLog('SYSTEM', 'WEBHOOK_SETUP_FAIL', err.message);
   }
 });
 
