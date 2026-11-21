@@ -1,0 +1,8 @@
+{
+  "html_text": "<b>Kaguya 2.0 — обновление</b>\n\n• Новое: часовые пояса для расписания (<code>/tz +3</code>)\n• Исправлены дубли автоответов\n\n<i>Пишите отзывы в комментариях!</i>",
+  "buttons": [
+    [{ "text": "🔗 Как подключить", "url": "https://kaguya-gospoja.onrender.com" }]
+  ],
+  "media_type": null,
+  "media_file_id": null
+}

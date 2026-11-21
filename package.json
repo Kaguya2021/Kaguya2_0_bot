@@ -5,7 +5,10 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "node --test"
+    "test": "node --test",
+    "inbox": "node scripts/inbox.js",
+    "inbox:ack": "node scripts/inbox.js --ack",
+    "draft:send": "node scripts/draft.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

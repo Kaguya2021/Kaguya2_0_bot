@@ -16,6 +16,8 @@ import {
   isIgnorableTelegramError,
   broadcast
 } from './lib/utils.js';
+import { extractChannelComment } from './lib/comments.js';
+import { buildPostKeyboard, buildSendPayload } from './lib/publishing.js';
 
 dotenv.config();
 
@@ -55,6 +57,10 @@ const ADMIN_IDS = parseAdminIds(process.env.ADMIN_IDS) || (() => {
   console.warn('⚠️ ADMIN_IDS не задан в env — используется временный встроенный список администраторов.');
   return ['6511859639', '7470537453'];
 })();
+
+// Фаза 2: канал для публикаций (только после апрува админа) и группа обсуждений (сбор фидбека).
+const TARGET_CHANNEL_ID = (process.env.TARGET_CHANNEL_ID || '').trim();
+const DISCUSSION_GROUP_ID = (process.env.DISCUSSION_GROUP_ID || '').trim();
 
 const PAUSE_DURATION = 10 * 60 * 1000;
 const ANTI_SPAM_PAUSE = 3000;              // без режима "Таймер": обычная защита от дублей (~3 сек)
@@ -174,6 +180,28 @@ function getSettingsInlineKeyboard() {
     .text('➕ Добавить аккаунт', 'settings_add_account').row()
     .text('⬅️ Назад в меню', 'settings_back');
 }
+
+// ===== СБОР КОММЕНТАРИЕВ ИЗ ГРУППЫ ОБСУЖДЕНИЙ (Фаза 2) =====
+// Зарегистрирован ДО команд: сообщения из группы обсуждений дальше не передаются,
+// поэтому бот никогда не отвечает в группе (кроме /chatid от админа).
+bot.on('message', async (ctx, next) => {
+  if (!DISCUSSION_GROUP_ID || String(ctx.chat?.id) !== DISCUSSION_GROUP_ID) return next();
+  if (ctx.hasCommand('chatid') && isAdmin(ctx.from?.id)) return next();
+
+  const comment = extractChannelComment(ctx.message, DISCUSSION_GROUP_ID);
+  if (!comment) return;
+  try {
+    await db.saveChannelComment(comment);
+  } catch (e) {
+    console.error('❌ saveChannelComment error:', e?.message || e);
+  }
+});
+
+// Утилита для админов: показывает chat.id и chat.type (например, чтобы узнать DISCUSSION_GROUP_ID).
+bot.command('chatid', async (ctx) => {
+  if (!isAdmin(ctx.from?.id)) return;
+  await ctx.reply(`chat.id: <code>${ctx.chat.id}</code>\nchat.type: <code>${ctx.chat.type}</code>`, { parse_mode: 'HTML' });
+});
 
 bot.command('start', async (ctx) => {
   const userId = String(ctx.from.id);
@@ -692,6 +720,85 @@ bot.callbackQuery('settings_back', async (ctx) => {
     parse_mode: 'HTML',
     reply_markup: getMainInlineKeyboard(userId, await getSettingsSafe(userId))
   });
+});
+
+// ===== HUMAN-IN-THE-LOOP ПУБЛИКАЦИЯ В КАНАЛ (Фаза 2) =====
+// Пост попадает в канал ТОЛЬКО здесь — после клика админа по кнопке превью.
+
+// Убирает с превью ряд одобрения, оставляя URL-кнопки самого поста.
+async function removeApprovalButtons(ctx, draft) {
+  try {
+    await ctx.editMessageReplyMarkup({ reply_markup: buildPostKeyboard(draft?.buttons_json) || { inline_keyboard: [] } });
+  } catch (e) {}
+}
+
+bot.callbackQuery(/^draft_approve:(\d+)$/, async (ctx) => {
+  if (!isAdmin(ctx.from.id)) {
+    return await ctx.answerCallbackQuery({ text: 'Нет доступа', show_alert: true });
+  }
+  if (!TARGET_CHANNEL_ID) {
+    return await ctx.answerCallbackQuery({ text: '⚠️ TARGET_CHANNEL_ID не задан — публикация в канал запрещена.', show_alert: true });
+  }
+
+  const draftId = Number(ctx.match[1]);
+  let draft;
+  try {
+    draft = await db.claimDraftForPublishing(draftId);
+  } catch (e) {
+    return await ctx.answerCallbackQuery({ text: '⚠️ База данных недоступна, попробуйте ещё раз.', show_alert: true });
+  }
+  if (!draft) {
+    return await ctx.answerCallbackQuery({ text: 'Черновик уже опубликован или отменён', show_alert: true });
+  }
+  await ctx.answerCallbackQuery({ text: '⏳ Публикую…' }).catch(() => {});
+
+  let sent;
+  try {
+    const { method, args } = buildSendPayload(draft, TARGET_CHANNEL_ID, buildPostKeyboard(draft.buttons_json));
+    sent = await ctx.api[method](...args);
+  } catch (e) {
+    const details = e?.description || e?.message || String(e);
+    console.error(`❌ Публикация черновика #${draftId} не удалась:`, details);
+    db.saveErrorLog(String(TARGET_CHANNEL_ID), 'draft_publish', `[draft ${draftId}] ${details}`).catch(() => {});
+    let rollbackNote = 'Статус возвращён в pending_approval — можно исправить причину и нажать «Опубликовать» ещё раз.';
+    try {
+      await db.markDraftStatus(draftId, 'pending_approval', null, 'publishing');
+    } catch (dbErr) {
+      rollbackNote = `⚠️ Не удалось откатить статус (остался publishing): ${escapeHTML(dbErr?.message || dbErr)}`;
+    }
+    return await ctx.reply(
+      `❌ Черновик #${draftId} не опубликован.\nОшибка Telegram: <code>${escapeHTML(details)}</code>\n\n${rollbackNote}`,
+      { parse_mode: 'HTML' }
+    );
+  }
+
+  // Пост уже в канале: при сбое БД статус НЕ откатываем (остаётся publishing — повторная публикация невозможна).
+  try {
+    await db.markDraftPublished(draftId, { approvedBy: String(ctx.from.id), publishedMessageId: sent.message_id });
+  } catch (e) {
+    console.error(`⚠️ Черновик #${draftId} опубликован, но статус не сохранён:`, e?.message || e);
+  }
+  await removeApprovalButtons(ctx, draft);
+  await ctx.reply(`✅ Черновик #${draftId} опубликован в канал (message_id: ${sent.message_id})`);
+});
+
+bot.callbackQuery(/^draft_cancel:(\d+)$/, async (ctx) => {
+  if (!isAdmin(ctx.from.id)) {
+    return await ctx.answerCallbackQuery({ text: 'Нет доступа', show_alert: true });
+  }
+  const draftId = Number(ctx.match[1]);
+  let draft;
+  try {
+    draft = await db.markDraftStatus(draftId, 'cancelled', String(ctx.from.id), 'pending_approval');
+  } catch (e) {
+    return await ctx.answerCallbackQuery({ text: '⚠️ База данных недоступна, попробуйте ещё раз.', show_alert: true });
+  }
+  if (!draft) {
+    return await ctx.answerCallbackQuery({ text: 'Черновик уже опубликован или отменён', show_alert: true });
+  }
+  await ctx.answerCallbackQuery().catch(() => {});
+  await removeApprovalButtons(ctx, draft);
+  await ctx.reply(`❌ Черновик #${draftId} отменён`);
 });
 
 bot.command('no', async (ctx) => {
