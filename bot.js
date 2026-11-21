@@ -1,6 +1,21 @@
 import { Bot, InlineKeyboard } from 'grammy';
-import { db } from './database.js';
+import { db, DEFAULT_USER_SETTINGS } from './database.js';
 import dotenv from 'dotenv';
+import { BoundedCache } from './lib/cache.js';
+import {
+  parseAdminIds,
+  validateTimeArgs,
+  parseTzOffset,
+  formatTzOffset,
+  formatLocalTime,
+  isWithinWorkingHours,
+  pauseKey,
+  isPauseActive,
+  isAutoReplyActive,
+  isBlocked,
+  isIgnorableTelegramError,
+  broadcast
+} from './lib/utils.js';
 
 dotenv.config();
 
@@ -26,50 +41,87 @@ bot.catch((err) => {
   const errorCode = e?.error_code || e?.code;
   const description = e?.description || err?.message || String(err);
 
-  if (
-    errorCode === 403 ||
-    description.includes('blocked by the user') ||
-    description.includes('user is deactivated') ||
-    description.includes('chat not found') ||
-    description.includes('bot was kicked')
-  ) {
+  if (isIgnorableTelegramError({ error_code: errorCode, description })) {
     return;
   }
 
   const updateId = err?.ctx?.update?.update_id;
   console.error(`❌ BotError [update ${updateId ?? '?'}]:`, description);
+  const logChatId = String(err?.ctx?.chat?.id ?? err?.ctx?.from?.id ?? 'unknown');
+  db.saveErrorLog(logChatId, 'bot_catch', `[update ${updateId ?? '?'}] ${description}`).catch(() => {});
 });
 
-const ADMIN_IDS = ['6511859639', '7470537453'];
+const ADMIN_IDS = parseAdminIds(process.env.ADMIN_IDS) || (() => {
+  console.warn('⚠️ ADMIN_IDS не задан в env — используется временный встроенный список администраторов.');
+  return ['6511859639', '7470537453'];
+})();
 
 const PAUSE_DURATION = 10 * 60 * 1000;
 const ANTI_SPAM_PAUSE = 3000;              // без режима "Таймер": обычная защита от дублей (~3 сек)
 const AUTO_REPLY_COOLDOWN = 15 * 60 * 1000; // с режимом "Таймер": 1 автоответ раз в 15 минут на чат
-const AUTO_OFF_DURATION = 5 * 60 * 1000; 
+const AUTO_OFF_DURATION = 5 * 60 * 1000;
+const BLOCK_DURATION = 24 * 60 * 60 * 1000;
+const DEFAULT_REPLY = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
 
-const processedMessages = new Set();
-const localPauses = new Map();
-const replyCache = new Map();
-const stepState = new Map();
-const autoOffUntil = new Map(); 
-const connectionOwners = new Map();
-const allowedUsernameCache = new Map(); // ownerId -> username (или null)
-const timerModeCache = new Map();       // ownerId -> true/false (режим "Таймер 15 мин")
+// Ограниченные кэши (защита от утечки памяти). Очистка протухших записей каждые 5 минут.
+const CLEANUP_INTERVAL = 5 * 60 * 1000;
+const processedMessages = new BoundedCache({ maxSize: 10000, ttlMs: 30 * 1000 }).startCleanup(CLEANUP_INTERVAL);
+// ключ `${ownerId}:${chatId}` -> pauseUntil (TTL записи = длительность паузы)
+const localPauses = new BoundedCache({ maxSize: 20000 }).startCleanup(CLEANUP_INTERVAL);
+const stepState = new BoundedCache({ maxSize: 5000, ttlMs: 60 * 60 * 1000 }).startCleanup(CLEANUP_INTERVAL);
+const connectionOwners = new BoundedCache({ maxSize: 5000, ttlMs: 24 * 60 * 60 * 1000 }).startCleanup(CLEANUP_INTERVAL);
+// userId -> полный объект настроек (в т.ч. дефолтный, если строки в БД нет)
+const settingsCache = new BoundedCache({ maxSize: 5000, ttlMs: 30 * 60 * 1000 }).startCleanup(CLEANUP_INTERVAL);
 
-function isAutoReplyActive(userId) {
-  const until = autoOffUntil.get(userId);
-  if (!until) return true;
-  if (Date.now() >= until) {
-    autoOffUntil.delete(userId);
-    return true;
-  }
-  return false;
+let globalStop = false;
+let botStateReady = null;
+
+// Загружает персистентное состояние бота (global_stop) из БД. Вызывается при старте.
+// Никогда не reject'ится; business_message дожидается её, чтобы не ответить до загрузки global_stop.
+export function loadBotState() {
+  botStateReady = (async () => {
+    try {
+      globalStop = (await db.getBotState('global_stop')) === 'true';
+      if (globalStop) console.warn('🛑 global_stop = true (загружено из БД): автоответчик остановлен для всех.');
+    } catch (e) {
+      console.error('⚠️ Не удалось загрузить bot_state из БД:', e?.message || e);
+    }
+  })();
+  return botStateReady;
 }
 
-function getAutoOffMinutesLeft(userId) {
-  const until = autoOffUntil.get(userId);
+// Настройки пользователя: кэш -> БД (один SELECT). Ошибку БД пробрасывает (в кэш не пишем).
+async function getSettings(userId) {
+  if (settingsCache.has(userId)) return settingsCache.get(userId);
+  const settings = await db.getUserSettings(userId);
+  settingsCache.set(userId, settings);
+  return settings;
+}
+
+// Для меню: при недоступной БД возвращаем дефолт (как раньше getTimerMode -> false).
+async function getSettingsSafe(userId) {
+  try {
+    return await getSettings(userId);
+  } catch (e) {
+    return { ...DEFAULT_USER_SETTINGS };
+  }
+}
+
+// Обновляет кэш после успешной записи в БД (если записи нет — следующий запрос подтянет из БД).
+function patchSettings(userId, patch) {
+  if (settingsCache.has(userId)) {
+    settingsCache.set(userId, { ...settingsCache.get(userId), ...patch });
+  }
+}
+
+function getAutoOffMinutesLeft(settings) {
+  const until = Number(settings?.auto_off_until) || 0;
   if (!until) return 0;
   return Math.max(1, Math.ceil((until - Date.now()) / 60000));
+}
+
+function isValidTargetId(id) {
+  return typeof id === 'string' && /^-?\d+$/.test(id);
 }
 
 // Сохраняет автоответ в БД и только после успеха кладёт в кэш.
@@ -78,7 +130,7 @@ function getAutoOffMinutesLeft(userId) {
 async function saveReply(ctx, userId, value) {
   try {
     await db.setCustomReply(userId, value);
-    replyCache.set(userId, value);
+    patchSettings(userId, { custom_reply: value });
     return true;
   } catch (e) {
     await ctx.reply('⚠️ Не удалось сохранить автоответ (база данных недоступна). Попробуйте ещё раз через минуту.').catch(() => {});
@@ -90,25 +142,13 @@ function isAdmin(userId) {
   return ADMIN_IDS.includes(String(userId));
 }
 
-async function getTimerMode(userId) {
-  let enabled = timerModeCache.get(userId);
-  if (enabled === undefined) {
-    try {
-      enabled = await db.getTimerMode(userId);
-      timerModeCache.set(userId, enabled);
-    } catch (e) {
-      return false; // ошибку БД в кэш не пишем
-    }
-  }
-  return enabled;
-}
-
 // Главное меню теперь строится как inline-кнопки (под сообщением), а не обычная клавиатура
-function getMainInlineKeyboard(userId, timerOn) {
-  const isActive = isAutoReplyActive(userId);
+function getMainInlineKeyboard(userId, settings) {
+  const isActive = isAutoReplyActive(settings);
+  const timerOn = settings?.timer_mode === true;
   const statusButtonText = isActive
     ? '🔕 Выключить автоответ (5 мин)'
-    : `🔔 Включить автоответ (осталось ${getAutoOffMinutesLeft(userId)} мин)`;
+    : `🔔 Включить автоответ (осталось ${getAutoOffMinutesLeft(settings)} мин)`;
 
   const timerButtonText = timerOn
     ? '⛔ Таймер откл (сейчас: 1 автоответ / 15 мин)'
@@ -170,7 +210,7 @@ bot.command('start', async (ctx) => {
 
   await ctx.reply('🚀 <b>Главное меню автоответчика:</b>', {
     parse_mode: 'HTML',
-    reply_markup: getMainInlineKeyboard(userId, await getTimerMode(userId))
+    reply_markup: getMainInlineKeyboard(userId, await getSettingsSafe(userId))
   });
 });
 
@@ -208,11 +248,9 @@ bot.command('adminppa', showAdminPanel);
 
 bot.command('my', async (ctx) => {
   const userId = String(ctx.from.id);
-  let currentReply = replyCache.get(userId);
-  if (!currentReply) {
-    try { currentReply = await db.getCustomReply(userId); }
-    catch (e) { return await ctx.reply('⚠️ База данных временно недоступна, попробуйте позже.'); }
-  }
+  let currentReply;
+  try { currentReply = (await getSettings(userId)).custom_reply; }
+  catch (e) { return await ctx.reply('⚠️ База данных временно недоступна, попробуйте позже.'); }
   if (!currentReply) {
     return await ctx.reply('ℹ️ У вас установлен <b>дефолтный текст</b>.', { parse_mode: 'HTML' });
   }
@@ -224,7 +262,7 @@ bot.command(['reset', 'clear'], async (ctx) => {
   stepState.delete(userId);
   try {
     await db.setCustomReply(userId, null);
-    replyCache.delete(userId);
+    patchSettings(userId, { custom_reply: null });
   } catch (e) {
     return await ctx.reply('⚠️ Не удалось сбросить (база данных недоступна). Попробуйте позже.');
   }
@@ -244,7 +282,7 @@ bot.command('setreply', async (ctx) => {
 
   try {
     await db.setCustomReply(targetId, newReply);
-    replyCache.set(targetId, newReply);
+    patchSettings(targetId, { custom_reply: newReply });
   } catch (e) {
     return await ctx.reply('⚠️ Ошибка БД, не сохранено.');
   }
@@ -257,12 +295,26 @@ bot.command('stop', async (ctx) => {
   const target = args[1]?.toLowerCase();
 
   if (target === 'all') {
-    globalThis.globalStop = true;
+    try {
+      await db.setBotState('global_stop', 'true');
+    } catch (e) {
+      return await ctx.reply('⚠️ Ошибка БД, состояние не сохранено.');
+    }
+    globalStop = true;
     return await ctx.reply('🛑 <b>Глобальный автоответчик ОСТАНОВЛЕН!</b>', { parse_mode: 'HTML' });
   }
   if (target) {
-    localPauses.set(target, Date.now() + 24 * 60 * 60 * 1000);
-    return await ctx.reply(`🛑 Автоответчик остановлен для ID: <code>${target}</code>`, { parse_mode: 'HTML' });
+    if (!isValidTargetId(target)) {
+      return await ctx.reply('❌ ID должен быть числом: <code>/stop 123456789</code>', { parse_mode: 'HTML' });
+    }
+    const until = Date.now() + BLOCK_DURATION;
+    try {
+      await db.setBlockedUntil(target, until);
+    } catch (e) {
+      return await ctx.reply('⚠️ Ошибка БД, блокировка не сохранена.');
+    }
+    patchSettings(target, { blocked_until: until });
+    return await ctx.reply(`🛑 Автоответчик остановлен на 24 ч для ID: <code>${target}</code>`, { parse_mode: 'HTML' });
   }
   await ctx.reply('❌ Использование: <code>/stop all</code> или <code>/stop &lt;USER_ID&gt;</code>', { parse_mode: 'HTML' });
 });
@@ -273,11 +325,24 @@ bot.command('unstop', async (ctx) => {
   const target = args[1]?.toLowerCase();
 
   if (target === 'all') {
-    globalThis.globalStop = false;
+    try {
+      await db.setBotState('global_stop', 'false');
+    } catch (e) {
+      return await ctx.reply('⚠️ Ошибка БД, состояние не сохранено.');
+    }
+    globalStop = false;
     return await ctx.reply('✅ <b>Глобальный автоответчик ВКЛЮЧЕН!</b>', { parse_mode: 'HTML' });
   }
   if (target) {
-    localPauses.delete(target);
+    if (!isValidTargetId(target)) {
+      return await ctx.reply('❌ ID должен быть числом: <code>/unstop 123456789</code>', { parse_mode: 'HTML' });
+    }
+    try {
+      await db.setBlockedUntil(target, null);
+    } catch (e) {
+      return await ctx.reply('⚠️ Ошибка БД, разблокировка не сохранена.');
+    }
+    patchSettings(target, { blocked_until: null });
     return await ctx.reply(`✅ Автоответчик возобновлен для ID: <code>${target}</code>`, { parse_mode: 'HTML' });
   }
   await ctx.reply('❌ Использование: <code>/unstop all</code> или <code>/unstop &lt;USER_ID&gt;</code>', { parse_mode: 'HTML' });
@@ -292,16 +357,10 @@ bot.command('m', async (ctx) => {
   await ctx.reply(`📢 <b>Начинаю рассылку...</b> Всего получателей: ${users.length}`, { parse_mode: 'HTML' });
 
   (async () => {
-    let successCount = 0;
-    for (const u of users) {
-      try {
-        await ctx.api.sendMessage(u.user_id || u.telegram_id || u, text, { parse_mode: 'HTML' });
-        successCount++;
-      } catch (e) {}
-      await new Promise((res) => setTimeout(res, 50));
-    }
-    await ctx.reply(`🎉 <b>Рассылка завершена!</b> Доставлено: ${successCount}`, { parse_mode: 'HTML' });
-  })();
+    const ids = users.map((u) => u.user_id || u.telegram_id || u);
+    const { delivered, failed } = await broadcast(ids, (id) => ctx.api.sendMessage(id, text, { parse_mode: 'HTML' }));
+    await ctx.reply(`🎉 <b>Рассылка завершена!</b> Доставлено: ${delivered} / Ошибок: ${failed}`, { parse_mode: 'HTML' });
+  })().catch((e) => console.error('Broadcast /m error:', e?.message || e));
 });
 
 bot.command('mm', async (ctx) => {
@@ -332,18 +391,21 @@ bot.command('info', async (ctx) => {
         userInfo = await db.getUserInfo(targetId) || {};
       }
 
-      const customReply = await db.getCustomReply?.(targetId).catch(() => null) || 'Стандартный дефолтный текст';
-      const schedule = await db.getSchedule?.(targetId).catch(() => null);
-      const autoReplyStatus = isAutoReplyActive(targetId)
-        ? '✅ Включен'
-        : `🔕 Выключен (осталось ${getAutoOffMinutesLeft(targetId)} мин)`;
+      const targetSettings = await db.getUserSettings(targetId).catch(() => ({ ...DEFAULT_USER_SETTINGS }));
+      const customReply = targetSettings.custom_reply || 'Стандартный дефолтный текст';
+      const schedule = targetSettings;
+      const autoReplyStatus = isBlocked(targetSettings)
+        ? '⛔ Заблокирован админом'
+        : isAutoReplyActive(targetSettings)
+          ? '✅ Включен'
+          : `🔕 Выключен (осталось ${getAutoOffMinutesLeft(targetSettings)} мин)`;
 
       let infoText = `📊 <b>Информация о пользователе ID:</b> <code>${targetId}</code>\n\n`;
       infoText += `📅 <b>Подключен:</b> ${userInfo.created_at || userInfo.date || 'Неизвестно'}\n`;
       infoText += `👤 <b>Username/Имя:</b> ${userInfo.username || userInfo.name || 'Нет данных'}\n`;
       infoText += `🔔 <b>Статус автоответа:</b> ${autoReplyStatus}\n`;
       infoText += `💬 <b>Текущий автоответ:</b>\n<code>${escapeHTML(customReply)}</code>\n\n`;
-      infoText += `⏰ <b>График работы:</b> ${schedule?.start_time ? `${schedule.start_time} - ${schedule.end_time}` : 'Круглосуточно'}`;
+      infoText += `⏰ <b>График работы:</b> ${schedule?.start_time ? `${schedule.start_time} - ${schedule.end_time}` : 'Круглосуточно'} (${formatTzOffset(targetSettings.timezone_offset_min)})`;
 
       return await ctx.reply(infoText, { parse_mode: 'HTML' });
     } catch (e) {
@@ -367,26 +429,81 @@ bot.command('post', async (ctx) => {
   await ctx.reply('📢 <b>Режим создания поста:</b> Отправьте следующий пост для рассылки!', { parse_mode: 'HTML' });
 });
 
+function tzInfoText(settings) {
+  const offset = settings?.timezone_offset_min || 0;
+  return `🌍 Ваш часовой пояс: <b>${formatTzOffset(offset)}</b>, сейчас по нему <b>${formatLocalTime(new Date(), offset)}</b>.\n` +
+    'Изменить: <code>/tz +3</code> (формат: <code>+6</code>, <code>-3</code>, <code>0</code>, <code>+3:30</code>)';
+}
+
+function timeHelpText(settings) {
+  return '⏰ <b>Настройка рабочего времени:</b>\n\n' +
+    'Отправьте команду с желаемым временем (формат ЧЧ:ММ).\n' +
+    '• Пример: <code>/time 05:00 20:00</code>\n' +
+    '• Ночной интервал: <code>/time 22:00 06:00</code>\n' +
+    '• Отключить лимит: <code>/time off</code>\n\n' +
+    tzInfoText(settings);
+}
+
 bot.command('time', async (ctx) => {
   try {
     const userId = String(ctx.from.id);
-    const fullText = ctx.message.text || '';
-    const args = fullText.replace(/^\/time\s*/i, '').trim().split(/\s+/);
+    const rawArgs = (ctx.match || '').trim();
+    const args = rawArgs ? rawArgs.split(/\s+/) : [];
 
     if (args[0] && args[0].toLowerCase() === 'off') {
       await db.setSchedule(userId, null, null);
+      patchSettings(userId, { start_time: null, end_time: null });
       return await ctx.reply('✅ <b>Ограничение по времени отключено.</b>', { parse_mode: 'HTML' });
     }
 
-    if (args.length < 2) {
-      return await ctx.reply('❌ Укажите время: <code>/time 05:00 20:00</code> или <code>/time off</code>', { parse_mode: 'HTML' });
+    const parsed = validateTimeArgs(args);
+    if (!parsed.ok) {
+      return await ctx.reply(
+        '❌ Неверный формат. Укажите время как ЧЧ:ММ (00:00–23:59): <code>/time 05:00 20:00</code> или <code>/time off</code>\n\n' +
+        tzInfoText(await getSettingsSafe(userId)),
+        { parse_mode: 'HTML' }
+      );
     }
 
-    await db.setSchedule(userId, args[0], args[1]);
-    await ctx.reply(`✅ <b>График сохранен!</b> с ${args[0]} до ${args[1]}.`, { parse_mode: 'HTML' });
+    await db.setSchedule(userId, parsed.start, parsed.end);
+    patchSettings(userId, { start_time: parsed.start, end_time: parsed.end });
+    const settings = await getSettingsSafe(userId);
+    await ctx.reply(
+      `✅ <b>График сохранен!</b> с ${parsed.start} до ${parsed.end} (${formatTzOffset(settings.timezone_offset_min)}).\n\n` +
+      tzInfoText(settings),
+      { parse_mode: 'HTML' }
+    );
   } catch (err) {
     await ctx.reply(`❌ Ошибка: ${err.message}`);
   }
+});
+
+bot.command('tz', async (ctx) => {
+  const userId = String(ctx.from.id);
+  const arg = (ctx.match || '').trim();
+
+  if (!arg) {
+    return await ctx.reply(tzInfoText(await getSettingsSafe(userId)) + '\nДиапазон: от -12 до +14 часов.', { parse_mode: 'HTML' });
+  }
+
+  const offset = parseTzOffset(arg);
+  if (offset === null) {
+    return await ctx.reply(
+      '❌ Неверный часовой пояс. Примеры: <code>/tz +6</code>, <code>/tz -3</code>, <code>/tz 0</code>, <code>/tz +3:30</code> (от -12 до +14).',
+      { parse_mode: 'HTML' }
+    );
+  }
+
+  try {
+    await db.setTimezoneOffset(userId, offset);
+  } catch (e) {
+    return await ctx.reply('⚠️ Не удалось сохранить часовой пояс (база данных недоступна). Попробуйте позже.');
+  }
+  patchSettings(userId, { timezone_offset_min: offset });
+  await ctx.reply(
+    `✅ <b>Часовой пояс сохранён:</b> ${formatTzOffset(offset)}\nСейчас по нему: <b>${formatLocalTime(new Date(), offset)}</b>`,
+    { parse_mode: 'HTML' }
+  );
 });
 
 bot.command('sred', async (ctx) => {
@@ -404,7 +521,7 @@ bot.command('set', async (ctx) => {
       return await ctx.reply('🎤 <b>Отправьте голосовое сообщение:</b>', { parse_mode: 'HTML' });
     }
 
-    if (!customText) return await ctx.reply('❌ Ошибка. Напишите текст после `/set`.', { parse_mode: 'HTML' });
+    if (!customText) return await ctx.reply('❌ Ошибка. Напишите текст после <code>/set</code>.', { parse_mode: 'HTML' });
 
     stepState.delete(userId);
     if (!(await saveReply(ctx, userId, customText))) return;
@@ -419,25 +536,35 @@ bot.command('set', async (ctx) => {
 
 bot.callbackQuery('toggle_autoreply', async (ctx) => {
   const userId = String(ctx.from.id);
-  if (isAutoReplyActive(userId)) {
-    autoOffUntil.set(userId, Date.now() + AUTO_OFF_DURATION);
-    await ctx.answerCallbackQuery({ text: '🔕 Автоответчик выключен на 5 минут' });
-  } else {
-    autoOffUntil.delete(userId);
-    await ctx.answerCallbackQuery({ text: '🔔 Автоответчик включен!' });
-  }
+  let settings;
   try {
-    await ctx.editMessageReplyMarkup({ reply_markup: getMainInlineKeyboard(userId, await getTimerMode(userId)) });
+    settings = await getSettings(userId);
+  } catch (e) {
+    return await ctx.answerCallbackQuery({ text: '⚠️ База данных недоступна, попробуйте ещё раз.', show_alert: true });
+  }
+
+  const turnOff = isAutoReplyActive(settings);
+  const until = turnOff ? Date.now() + AUTO_OFF_DURATION : null;
+  try {
+    await db.setAutoOffUntil(userId, until);
+  } catch (e) {
+    return await ctx.answerCallbackQuery({ text: '⚠️ База данных недоступна, попробуйте ещё раз.', show_alert: true });
+  }
+  patchSettings(userId, { auto_off_until: until });
+
+  await ctx.answerCallbackQuery({ text: turnOff ? '🔕 Автоответчик выключен на 5 минут' : '🔔 Автоответчик включен!' });
+  try {
+    await ctx.editMessageReplyMarkup({ reply_markup: getMainInlineKeyboard(userId, await getSettingsSafe(userId)) });
   } catch (e) {}
 });
 
 bot.callbackQuery('toggle_timer_mode', async (ctx) => {
   const userId = String(ctx.from.id);
-  const current = await getTimerMode(userId);
+  const current = (await getSettingsSafe(userId)).timer_mode === true;
   const next = !current;
   try {
     await db.setTimerMode(userId, next);
-    timerModeCache.set(userId, next);
+    patchSettings(userId, { timer_mode: next });
   } catch (e) {
     return await ctx.answerCallbackQuery({ text: '⚠️ База данных недоступна, попробуйте ещё раз.', show_alert: true });
   }
@@ -448,7 +575,7 @@ bot.callbackQuery('toggle_timer_mode', async (ctx) => {
       : '⛔ Выключено: автоответ снова на каждое сообщение.'
   });
   try {
-    await ctx.editMessageReplyMarkup({ reply_markup: getMainInlineKeyboard(userId, next) });
+    await ctx.editMessageReplyMarkup({ reply_markup: getMainInlineKeyboard(userId, { ...(await getSettingsSafe(userId)), timer_mode: next }) });
   } catch (e) {}
 });
 
@@ -473,11 +600,9 @@ bot.callbackQuery('set_combo', async (ctx) => {
 bot.callbackQuery('my_reply', async (ctx) => {
   await ctx.answerCallbackQuery();
   const userId = String(ctx.from.id);
-  let currentReply = replyCache.get(userId);
-  if (!currentReply) {
-    try { currentReply = await db.getCustomReply(userId); }
-    catch (e) { return await ctx.reply('⚠️ База данных временно недоступна, попробуйте позже.'); }
-  }
+  let currentReply;
+  try { currentReply = (await getSettings(userId)).custom_reply; }
+  catch (e) { return await ctx.reply('⚠️ База данных временно недоступна, попробуйте позже.'); }
 
   if (!currentReply) {
     return await ctx.reply('ℹ️ У вас установлен <b>дефолтный текст</b>:\n<i>Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓</i>', { parse_mode: 'HTML' });
@@ -502,7 +627,7 @@ bot.callbackQuery('reset_reply', async (ctx) => {
   stepState.delete(userId);
   try {
     await db.setCustomReply(userId, null);
-    replyCache.delete(userId);
+    patchSettings(userId, { custom_reply: null });
   } catch (e) {
     return await ctx.reply('⚠️ Не удалось сбросить (база данных недоступна). Попробуйте позже.');
   }
@@ -512,13 +637,7 @@ bot.callbackQuery('reset_reply', async (ctx) => {
 
 bot.callbackQuery('set_time', async (ctx) => {
   await ctx.answerCallbackQuery();
-  await ctx.reply(
-    '⏰ <b>Настройка рабочего времени:</b>\n\n' +
-    'Отправьте команду с желаемым временем.\n' +
-    '• Пример: <code>/time 05:00 20:00</code>\n' +
-    '• Отключить лимит: <code>/time off</code>',
-    { parse_mode: 'HTML' }
-  );
+  await ctx.reply(timeHelpText(await getSettingsSafe(String(ctx.from.id))), { parse_mode: 'HTML' });
 });
 
 bot.callbackQuery('admin_panel', async (ctx) => {
@@ -533,14 +652,11 @@ bot.callbackQuery('admin_panel', async (ctx) => {
 bot.callbackQuery('settings_menu', async (ctx) => {
   await ctx.answerCallbackQuery();
   const userId = String(ctx.from.id);
-  let allowedUsername = allowedUsernameCache.get(userId);
-  if (allowedUsername === undefined) {
-    try {
-      allowedUsername = await db.getAllowedUsername(userId);
-      allowedUsernameCache.set(userId, allowedUsername);
-    } catch (e) {
-      return await ctx.reply('⚠️ База данных временно недоступна, попробуйте позже.');
-    }
+  let allowedUsername;
+  try {
+    allowedUsername = (await getSettings(userId)).allowed_username;
+  } catch (e) {
+    return await ctx.reply('⚠️ База данных временно недоступна, попробуйте позже.');
   }
 
   const statusLine = allowedUsername
@@ -574,7 +690,7 @@ bot.callbackQuery('settings_back', async (ctx) => {
   const userId = String(ctx.from.id);
   await ctx.reply('🚀 <b>Главное меню автоответчика:</b>', {
     parse_mode: 'HTML',
-    reply_markup: getMainInlineKeyboard(userId, await getTimerMode(userId))
+    reply_markup: getMainInlineKeyboard(userId, await getSettingsSafe(userId))
   });
 });
 
@@ -586,7 +702,7 @@ bot.command('no', async (ctx) => {
   const userId = String(ctx.from.id);
   try {
     await db.setAllowedUsername(userId, null);
-    allowedUsernameCache.set(userId, null);
+    patchSettings(userId, { allowed_username: null });
   } catch (e) {
     return await ctx.reply('⚠️ Не удалось снять ограничение (база данных недоступна). Попробуйте позже.');
   }
@@ -595,7 +711,8 @@ bot.command('no', async (ctx) => {
 });
 
 bot.on('message', async (ctx, next) => {
-  if (ctx.businessMessage) return next();
+  // Настройка через меню и stepState — только в личном чате с ботом (не в группах/каналах).
+  if (ctx.businessMessage || ctx.chat?.type !== 'private') return next();
 
   const userId = String(ctx.from.id);
   const state = stepState.get(userId);
@@ -608,7 +725,7 @@ bot.on('message', async (ctx, next) => {
     const username = raw.toLowerCase();
     try {
       await db.setAllowedUsername(userId, username);
-      allowedUsernameCache.set(userId, username);
+      patchSettings(userId, { allowed_username: username });
     } catch (e) {
       return await ctx.reply('⚠️ Не удалось сохранить (база данных недоступна). Отправьте username ещё раз.');
     }
@@ -636,23 +753,17 @@ bot.on('message', async (ctx, next) => {
     const messageId = ctx.message.message_id;
 
     (async () => {
-      let successCount = 0;
-      for (const u of users) {
-        try {
-          await ctx.api.copyMessage(u.user_id || u.telegram_id || u, chatId, messageId);
-          successCount++;
-        } catch (e) {}
-        await new Promise((res) => setTimeout(res, 50));
-      }
-      await ctx.api.sendMessage(chatId, `🎉 <b>Пост отправлен!</b> Получили: ${successCount}`, { parse_mode: 'HTML' });
-    })();
+      const ids = users.map((u) => u.user_id || u.telegram_id || u);
+      const { delivered, failed } = await broadcast(ids, (id) => ctx.api.copyMessage(id, chatId, messageId));
+      await ctx.api.sendMessage(chatId, `🎉 <b>Пост отправлен!</b> Доставлено: ${delivered} / Ошибок: ${failed}`, { parse_mode: 'HTML' });
+    })().catch((e) => console.error('Broadcast /post error:', e?.message || e));
 
     return;
   }
 
   if (state && state.step === 'WAITING_TEXT' && ctx.message.text) {
     stepState.set(userId, { step: 'WAITING_STICKER', text: ctx.message.text });
-    return await ctx.reply('🖼️ <b>Шаг 2/2:</b> Теперь отправьте стикер:');
+    return await ctx.reply('🖼️ <b>Шаг 2/2:</b> Теперь отправьте стикер:', { parse_mode: 'HTML' });
   }
 
   if (state && state.step === 'WAITING_STICKER' && ctx.message.sticker) {
@@ -674,44 +785,22 @@ bot.on('message', async (ctx, next) => {
   return next();
 });
 
-async function isWithinWorkingHours(ownerId) {
-  try {
-    if (!ownerId || isAdmin(ownerId)) return true;
-    const schedule = await db.getSchedule(ownerId);
-    if (!schedule || !schedule.start_time || !schedule.end_time) return true;
-
-    const now = new Date();
-    const currentMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
-    const [startH, startM] = schedule.start_time.split(':').map(Number);
-    const [endH, endM] = schedule.end_time.split(':').map(Number);
-    const startMinutes = startH * 60 + startM;
-    const endMinutes = endH * 60 + endM;
-
-    if (startMinutes <= endMinutes) {
-      return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
-    } else {
-      return currentMinutes >= startMinutes || currentMinutes <= endMinutes;
-    }
-  } catch (e) {
-    return true;
-  }
-}
-
 bot.on('business_message', async (ctx) => {
+  let chatId = 'unknown';
   try {
-    if (globalThis.globalStop) return;
+    if (botStateReady) await botStateReady;
+    if (globalStop) return;
     const businessMessage = ctx.businessMessage;
     if (!businessMessage || businessMessage.from.is_bot) return;
 
-    const connectionId = businessMessage.business_connection_id; 
-    const chatId = String(businessMessage.chat.id);
+    const connectionId = businessMessage.business_connection_id;
+    chatId = String(businessMessage.chat.id);
     const messageId = businessMessage.message_id;
     const senderId = String(businessMessage.from.id);
 
-    const uniqueKey = `${chatId}:${messageId}`;
+    const uniqueKey = `${connectionId}:${chatId}:${messageId}`;
     if (processedMessages.has(uniqueKey)) return;
-    processedMessages.add(uniqueKey);
-    setTimeout(() => processedMessages.delete(uniqueKey), 30 * 1000);
+    processedMessages.set(uniqueKey, true);
 
     let ownerId = connectionOwners.get(connectionId);
     if (!ownerId) {
@@ -726,86 +815,67 @@ bot.on('business_message', async (ctx) => {
 
     if (!ownerId) return;
 
-    if (!isAutoReplyActive(ownerId)) return; 
+    const key = pauseKey(ownerId, chatId);
 
+    // Владелец сам написал в чат — пауза автоответа в этом чате (только для этого владельца).
     if (senderId === ownerId) {
-      localPauses.set(chatId, Date.now() + PAUSE_DURATION);
+      localPauses.set(key, Date.now() + PAUSE_DURATION, PAUSE_DURATION);
       return;
     }
 
+    if (isPauseActive(localPauses, ownerId, chatId)) return;
+
+    // Все настройки владельца — одним запросом (с кэшем). БД недоступна — не отвечаем,
+    // чтобы не нарушить ограничение по аккаунту и не отправить дефолт вместо кастомного текста.
+    let settings;
+    try {
+      settings = await getSettings(ownerId);
+    } catch (e) {
+      return;
+    }
+
+    if (isBlocked(settings)) return;
+    if (!isAutoReplyActive(settings)) return;
+
     // Ограничение автоответа на конкретный аккаунт (настраивается в "⚙️ Настройки")
-    let allowedUsername = allowedUsernameCache.get(ownerId);
-    if (allowedUsername === undefined) {
-      try {
-        allowedUsername = await db.getAllowedUsername(ownerId);
-        allowedUsernameCache.set(ownerId, allowedUsername);
-      } catch (e) {
-        return; // БД недоступна — не отвечаем, чтобы не нарушить ограничение по аккаунту
-      }
-    }
-    if (allowedUsername) {
+    if (settings.allowed_username) {
       const senderUsername = (businessMessage.from.username || '').toLowerCase();
-      if (senderUsername !== allowedUsername) return;
+      if (senderUsername !== settings.allowed_username) return;
     }
 
-    const localPauseUntil = localPauses.get(chatId);
-    if (localPauseUntil && localPauseUntil > Date.now()) return;
-
-    if (await db.isPaused?.(chatId).catch(() => false)) return;
-    if (!(await isWithinWorkingHours(ownerId))) return;
+    if (!isWithinWorkingHours(ownerId, settings, settings.timezone_offset_min)) return;
 
     // Если владелец включил режим "⏱ Таймер 15 мин" — после автоответа этот чат ставится
     // на паузу 15 минут (новое сообщение раньше не вызовет повторный автоответ).
     // Если режим выключен (по умолчанию) — обычная защита от дублей на ~3 секунды,
     // автоответ уходит почти на каждое сообщение.
-    const timerOn = await getTimerMode(ownerId);
-    const cooldown = timerOn ? AUTO_REPLY_COOLDOWN : ANTI_SPAM_PAUSE;
-    localPauses.set(chatId, Date.now() + cooldown);
+    const cooldown = settings.timer_mode ? AUTO_REPLY_COOLDOWN : ANTI_SPAM_PAUSE;
+    localPauses.set(key, Date.now() + cooldown, cooldown);
 
-    let replyText = replyCache.get(ownerId);
-    if (!replyText) {
+    const replyText = settings.custom_reply || DEFAULT_REPLY;
+
+    if (replyText.startsWith('combo:')) {
+      const parts = replyText.replace('combo:', '').split('|||');
+      if (parts[0]) await ctx.api.sendMessage(chatId, escapeHTML(parts[0]), { business_connection_id: connectionId, parse_mode: 'HTML' });
+      if (parts[1]) await ctx.api.sendSticker(chatId, parts[1], { business_connection_id: connectionId });
+      return;
+    }
+
+    if (replyText.startsWith('voice:')) {
+      const voiceFileId = replyText.replace('voice:', '').trim();
       try {
-        replyText = await db.getCustomReply(ownerId);
+        await ctx.api.sendVoice(chatId, voiceFileId, { business_connection_id: connectionId });
       } catch (e) {
-        // БД недоступна (после нескольких повторов). Раньше тут молча уходил ДЕФОЛТНЫЙ текст.
-        // Теперь не отвечаем и снимаем паузу, чтобы следующее сообщение попробовало снова.
-        localPauses.delete(chatId);
-        return;
+        await ctx.api.sendAudio(chatId, voiceFileId, { business_connection_id: connectionId });
       }
-      if (replyText) {
-        replyCache.set(ownerId, replyText);
-      }
+      return;
     }
 
-    if (!replyText) {
-      replyText = 'Здравствуйте! Извините, я сейчас занят, но скоро обязательно вам отвечу. 🤓';
-    }
-
-    try {
-      if (replyText.startsWith('combo:')) {
-        const parts = replyText.replace('combo:', '').split('|||');
-        if (parts[0]) await ctx.api.sendMessage(chatId, escapeHTML(parts[0]), { business_connection_id: connectionId, parse_mode: 'HTML' });
-        if (parts[1]) await ctx.api.sendSticker(chatId, parts[1], { business_connection_id: connectionId });
-        return;
-      }
-
-      if (replyText.startsWith('voice:')) {
-        const voiceFileId = replyText.replace('voice:', '').trim();
-        try {
-          await ctx.api.sendVoice(chatId, voiceFileId, { business_connection_id: connectionId });
-        } catch (e) {
-          await ctx.api.sendAudio(chatId, voiceFileId, { business_connection_id: connectionId });
-        }
-        return;
-      }
-
-      await ctx.api.sendMessage(chatId, escapeHTML(replyText), { business_connection_id: connectionId, parse_mode: 'HTML' });
-    } catch (sendError) {
-      const errMsg = sendError.message || String(sendError);
-      if (errMsg.includes('blocked by the user') || sendError.error_code === 403) {
-        return; 
-      }
-    }
-  } catch (error) {}
+    await ctx.api.sendMessage(chatId, escapeHTML(replyText), { business_connection_id: connectionId, parse_mode: 'HTML' });
+  } catch (error) {
+    if (isIgnorableTelegramError(error)) return;
+    const details = error?.description || error?.message || String(error);
+    console.error('❌ business_message error:', details);
+    db.saveErrorLog(chatId, 'business_message', details).catch(() => {});
+  }
 });
-  

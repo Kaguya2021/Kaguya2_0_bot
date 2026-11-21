@@ -22,62 +22,114 @@ async function ensureDbInit() {
   if (isDbInitialized || !process.env.DATABASE_URL) return;
   if (!initPromise) {
     // Ошибка создания таблиц НЕ должна ломать все запросы: таблицы обычно уже существуют.
-    // Просто логируем причину, а сами запросы пусть сами решают, работает БД или нет.
+    // Логируем причину; initPromise сбрасывается, поэтому следующий запрос повторит инициализацию.
     initPromise = runDbInit()
-      .catch(() => {})
+      .catch((err) => { console.error('DB init error (будет повторная попытка):', err?.message || err); })
       .finally(() => { initPromise = null; });
   }
   return initPromise;
 }
 
+// Колонки user_settings, которые добавлялись после первой версии схемы.
+// Только ADD COLUMN IF NOT EXISTS — никаких DROP/RENAME (обратная совместимость).
+// Функции, а не готовые запросы: запрос postgres.js выполняется один раз, а init может повторяться.
+const USER_SETTINGS_COLUMNS = {
+  reply_mode: () => sql`ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS reply_mode VARCHAR(20) DEFAULT 'always'`,
+  allowed_username: () => sql`ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS allowed_username VARCHAR(100)`,
+  timer_mode: () => sql`ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS timer_mode BOOLEAN DEFAULT false`,
+  timezone_offset_min: () => sql`ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS timezone_offset_min SMALLINT DEFAULT 0`,
+  auto_off_until: () => sql`ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS auto_off_until BIGINT`,
+  blocked_until: () => sql`ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS blocked_until BIGINT`
+};
+
 async function runDbInit() {
-  try {
-    await sql`
-      CREATE TABLE IF NOT EXISTS user_settings (
-        user_id VARCHAR(50) PRIMARY KEY,
-        custom_reply TEXT,
-        start_time VARCHAR(10),
-        end_time VARCHAR(10),
-        reply_mode VARCHAR(20) DEFAULT 'always',
-        allowed_username VARCHAR(100),
-        timer_mode BOOLEAN DEFAULT false
-      );
-    `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS user_settings (
+      user_id VARCHAR(50) PRIMARY KEY,
+      custom_reply TEXT,
+      start_time VARCHAR(10),
+      end_time VARCHAR(10),
+      reply_mode VARCHAR(20) DEFAULT 'always',
+      allowed_username VARCHAR(100),
+      timer_mode BOOLEAN DEFAULT false
+    );
+  `;
 
-    await sql`ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS reply_mode VARCHAR(20) DEFAULT 'always';`;
-    await sql`ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS allowed_username VARCHAR(100);`;
-    await sql`ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS timer_mode BOOLEAN DEFAULT false;`;
-
-    await sql`
-      CREATE TABLE IF NOT EXISTS users (
-        user_id VARCHAR(50) PRIMARY KEY,
-        username VARCHAR(100),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `;
-
-    await sql`
-      CREATE TABLE IF NOT EXISTS chat_pauses (
-        chat_id VARCHAR(50) PRIMARY KEY,
-        pause_until BIGINT
-      );
-    `;
-
-    await sql`
-      CREATE TABLE IF NOT EXISTS message_logs (
-        id SERIAL PRIMARY KEY,
-        chat_id VARCHAR(50),
-        role VARCHAR(20),
-        content TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `;
-
-    isDbInitialized = true;
-  } catch (err) {
-    console.error('DB init error:', err.message);
-    throw err; // пусть вызывающий код знает, что БД недоступна (и повторит попытку)
+  // ALTER выполняем только для реально отсутствующих колонок (без лишних DDL на каждом старте).
+  const existing = await sql`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = current_schema() AND table_name = 'user_settings';
+  `;
+  const existingNames = new Set(existing.map((r) => r.column_name));
+  for (const [column, alter] of Object.entries(USER_SETTINGS_COLUMNS)) {
+    if (!existingNames.has(column)) {
+      await alter();
+      console.log(`🛠️ DB: добавлена колонка user_settings.${column}`);
+    }
   }
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS users (
+      user_id VARCHAR(50) PRIMARY KEY,
+      username VARCHAR(100),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS chat_pauses (
+      chat_id VARCHAR(50) PRIMARY KEY,
+      pause_until BIGINT
+    );
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS message_logs (
+      id SERIAL PRIMARY KEY,
+      chat_id VARCHAR(50),
+      role VARCHAR(20),
+      content TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS bot_state (
+      key VARCHAR(50) PRIMARY KEY,
+      value TEXT,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `;
+
+  isDbInitialized = true;
+}
+
+const toNumOrNull = (v) => (v === null || v === undefined ? null : Number(v));
+
+export const DEFAULT_USER_SETTINGS = Object.freeze({
+  custom_reply: null,
+  start_time: null,
+  end_time: null,
+  allowed_username: null,
+  timer_mode: false,
+  timezone_offset_min: 0,
+  auto_off_until: null,
+  blocked_until: null
+});
+
+function normalizeSettings(row) {
+  if (!row) return { ...DEFAULT_USER_SETTINGS };
+  return {
+    custom_reply: row.custom_reply ?? null,
+    start_time: row.start_time ?? null,
+    end_time: row.end_time ?? null,
+    allowed_username: row.allowed_username ?? null,
+    timer_mode: row.timer_mode === true,
+    timezone_offset_min: Number(row.timezone_offset_min) || 0,
+    // BIGINT приходит из postgres.js строкой
+    auto_off_until: toNumOrNull(row.auto_off_until),
+    blocked_until: toNumOrNull(row.blocked_until)
+  };
 }
 
 const rawDb = {
@@ -196,6 +248,77 @@ const rawDb = {
     await ensureDbInit();
     const res = await sql`SELECT timer_mode FROM user_settings WHERE user_id = ${userId};`;
     return res[0]?.timer_mode === true;
+  },
+
+  // --- ВСЕ НАСТРОЙКИ ОДНИМ ЗАПРОСОМ ---
+
+  getUserSettings: async (userId) => {
+    await ensureDbInit();
+    try {
+      const res = await sql`
+        SELECT custom_reply, start_time, end_time, allowed_username, timer_mode,
+               timezone_offset_min, auto_off_until, blocked_until
+        FROM user_settings WHERE user_id = ${userId};
+      `;
+      return normalizeSettings(res[0]);
+    } catch (err) {
+      // 42703 = undefined_column: новые колонки ещё не добавлены (миграция не прошла).
+      // Не ломаем автоответ — читаем старые колонки, новые берём по умолчанию.
+      if (err?.code !== '42703') throw err;
+      const res = await sql`
+        SELECT custom_reply, start_time, end_time, allowed_username, timer_mode
+        FROM user_settings WHERE user_id = ${userId};
+      `;
+      return normalizeSettings(res[0]);
+    }
+  },
+
+  setTimezoneOffset: async (userId, offsetMin) => {
+    await ensureDbInit();
+    return sql`
+      INSERT INTO user_settings (user_id, timezone_offset_min)
+      VALUES (${userId}, ${offsetMin})
+      ON CONFLICT (user_id)
+      DO UPDATE SET timezone_offset_min = EXCLUDED.timezone_offset_min;
+    `;
+  },
+
+  setAutoOffUntil: async (userId, timestampMsOrNull) => {
+    await ensureDbInit();
+    return sql`
+      INSERT INTO user_settings (user_id, auto_off_until)
+      VALUES (${userId}, ${timestampMsOrNull})
+      ON CONFLICT (user_id)
+      DO UPDATE SET auto_off_until = EXCLUDED.auto_off_until;
+    `;
+  },
+
+  setBlockedUntil: async (userId, timestampMsOrNull) => {
+    await ensureDbInit();
+    return sql`
+      INSERT INTO user_settings (user_id, blocked_until)
+      VALUES (${userId}, ${timestampMsOrNull})
+      ON CONFLICT (user_id)
+      DO UPDATE SET blocked_until = EXCLUDED.blocked_until;
+    `;
+  },
+
+  // --- СОСТОЯНИЕ БОТА (global_stop и т.п.) ---
+
+  getBotState: async (key) => {
+    await ensureDbInit();
+    const res = await sql`SELECT value FROM bot_state WHERE key = ${key};`;
+    return res[0]?.value ?? null;
+  },
+
+  setBotState: async (key, value) => {
+    await ensureDbInit();
+    return sql`
+      INSERT INTO bot_state (key, value, updated_at)
+      VALUES (${key}, ${value}, CURRENT_TIMESTAMP)
+      ON CONFLICT (key)
+      DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP;
+    `;
   },
 
   // --- РАБОТА С ПАУЗАМИ ---
