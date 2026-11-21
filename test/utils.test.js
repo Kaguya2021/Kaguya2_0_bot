@@ -9,13 +9,12 @@ import {
   formatLocalTime,
   pauseKey,
   isPauseActive,
-  parseAdminIds,
   isAutoReplyActive,
-  isBlocked,
-  callWith429Retry,
-  broadcast
-} from '../lib/utils.js';
-import { BoundedCache } from '../lib/cache.js';
+  isBlocked
+} from '../src/services/schedule.js';
+import { callWith429Retry, broadcast } from '../src/services/broadcast.js';
+import { parseAdminIds } from '../src/config.js';
+import { BoundedCache } from '../src/services/cache.js';
 
 // Время в UTC: 2026-01-01THH:MM:00Z
 const at = (hhmm) => new Date(`2026-01-01T${hhmm}:00Z`);

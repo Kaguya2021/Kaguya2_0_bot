@@ -79,3 +79,28 @@ export class BoundedCache {
     this.timer = null;
   }
 }
+
+// --- Инстансы кэшей бота ---
+// Очистка протухших записей каждые 5 минут.
+export const CLEANUP_INTERVAL = 5 * 60 * 1000;
+
+// Создаёт набор ограниченных кэшей бота с запущенной периодической очисткой.
+export function createBotCaches(intervalMs = CLEANUP_INTERVAL) {
+  return {
+    // `${connectionId}:${chatId}:${messageId}` -> true (защита от повторной обработки апдейта)
+    processedMessages: new BoundedCache({ maxSize: 10000, ttlMs: 30 * 1000 }).startCleanup(intervalMs),
+    // ключ `${ownerId}:${chatId}` -> pauseUntil (TTL записи = длительность паузы)
+    localPauses: new BoundedCache({ maxSize: 20000 }).startCleanup(intervalMs),
+    // userId -> { step, ... } (пошаговая настройка в личке)
+    stepState: new BoundedCache({ maxSize: 5000, ttlMs: 60 * 60 * 1000 }).startCleanup(intervalMs),
+    // business_connection_id -> ownerId
+    connectionOwners: new BoundedCache({ maxSize: 5000, ttlMs: 24 * 60 * 60 * 1000 }).startCleanup(intervalMs),
+    // userId -> полный объект настроек (в т.ч. дефолтный, если строки в БД нет)
+    userSettingsCache: new BoundedCache({ maxSize: 5000, ttlMs: 30 * 60 * 1000 }).startCleanup(intervalMs)
+  };
+}
+
+// Останавливает таймеры очистки всех кэшей набора.
+export function stopCachesCleanup(caches) {
+  for (const cache of Object.values(caches)) cache.stopCleanup();
+}

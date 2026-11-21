@@ -1,10 +1,14 @@
 import express from 'express';
 import { webhookCallback } from 'grammy';
-import { bot, loadBotState } from './bot.js';
-import { createWebhookSecretMiddleware } from './lib/webhookAuth.js';
+import { config } from './src/config.js';
+import { createBot, loadBotState } from './src/bot/index.js';
+import { ensureSchema } from './src/db/migrations.js';
+import { createWebhookSecretMiddleware } from './src/services/webhook.js';
 
-const USE_POLLING = process.env.USE_POLLING === 'true';
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
+const bot = createBot();
+
+const USE_POLLING = config.usePolling;
+const WEBHOOK_SECRET = config.webhookSecret;
 
 if (!USE_POLLING && !WEBHOOK_SECRET) {
   console.error('🚨 КРИТИЧНО: WEBHOOK_SECRET не задан! /api/webhook принимает запросы без проверки подписи Telegram. Добавьте WEBHOOK_SECRET в переменные окружения Render.');
@@ -42,11 +46,9 @@ if (!USE_POLLING) {
   app.post('/api/webhook', createWebhookSecretMiddleware(WEBHOOK_SECRET), webhookCallback(bot, 'express'));
 }
 
-const PORT = process.env.PORT || 3000;
-// Render сам подставляет RENDER_EXTERNAL_URL для каждого веб-сервиса.
-// Если переменная почему-то не пришла — используем актуальный адрес этого сервиса
-// (раньше тут был захардкожен старый/чужой домен, из-за чего вебхук не ставился).
-const RENDER_URL = process.env.RENDER_EXTERNAL_URL || 'https://kaguya2-0-bot-clhl.onrender.com';
+const PORT = config.port;
+// Render сам подставляет RENDER_EXTERNAL_URL для каждого веб-сервиса (fallback — в src/config.js).
+const RENDER_URL = config.renderUrl;
 
 async function setWebhookWithRetry(webhookUrl, attempt = 1) {
   try {
@@ -74,6 +76,11 @@ async function startPolling() {
     onStart: (info) => console.log(`🤖 Бот @${info.username} запущен в режиме polling`)
   });
 }
+
+// Миграции БД в фоне (не блокируем старт сервера — Render ждёт открытия порта).
+// Если всё уже применено — один SELECT из schema_migrations, без DDL.
+// Запросы репозиториев дожидаются этого же промиса, поэтому до готовности схемы в БД не пишем.
+ensureSchema();
 
 // Подгружаем персистентное состояние (global_stop) в фоне — не блокируем старт сервера.
 loadBotState();

@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractChannelComment } from '../lib/comments.js';
+import { extractChannelComment } from '../src/services/comments.js';
 import {
   validateDraft,
   isAllowedButtonUrl,
@@ -9,8 +9,8 @@ import {
   buildSendPayload,
   MAX_TEXT_LENGTH,
   MAX_CAPTION_LENGTH
-} from '../lib/publishing.js';
-import { formatInboxReport, parseInboxArgs } from '../lib/inbox.js';
+} from '../src/services/publishing.js';
+import { formatInboxReport, parseInboxArgs } from '../src/services/inbox.js';
 
 const GROUP = '-1001234567890';
 const msg = (over = {}) => ({

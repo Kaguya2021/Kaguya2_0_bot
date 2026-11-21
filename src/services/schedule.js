@@ -1,17 +1,8 @@
-// Чистые функции без побочных эффектов (импортируются в тестах без запуска сервера/бота).
+// Чистые функции расписания, часовых поясов, пауз и статуса автоответа (без БД и сети).
 
 export const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 export const MIN_TZ_OFFSET_MIN = -12 * 60;
 export const MAX_TZ_OFFSET_MIN = 14 * 60;
-
-// --- ADMIN_IDS ---
-
-// "1, 2,3" -> ['1','2','3']; пусто/не задано -> null
-export function parseAdminIds(raw) {
-  if (!raw || typeof raw !== 'string') return null;
-  const ids = raw.split(',').map((s) => s.trim()).filter((s) => /^\d+$/.test(s));
-  return ids.length ? ids : null;
-}
 
 // --- /time ---
 
@@ -112,49 +103,9 @@ export function isBlocked(settings, now = Date.now()) {
   return until > now;
 }
 
-// --- Ошибки Telegram ---
-
-export function isIgnorableTelegramError(err) {
-  const code = err?.error_code ?? err?.code;
-  const description = String(err?.description || err?.message || err || '');
-  return (
-    code === 403 ||
-    description.includes('blocked by the user') ||
-    description.includes('user is deactivated') ||
-    description.includes('chat not found') ||
-    description.includes('bot was kicked')
-  );
-}
-
-// --- Рассылки с обработкой 429 ---
-
-const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// Выполняет fn; при 429 Too Many Requests ждёт retry_after секунд и повторяет один раз.
-export async function callWith429Retry(fn, sleep = defaultSleep) {
-  try {
-    return await fn();
-  } catch (e) {
-    const code = e?.error_code ?? e?.code;
-    if (code !== 429) throw e;
-    const retryAfter = Number(e?.parameters?.retry_after) || 1;
-    await sleep(retryAfter * 1000);
-    return await fn();
-  }
-}
-
-// Последовательная рассылка. sendFn(userId) -> Promise. Возвращает { delivered, failed }.
-export async function broadcast(userIds, sendFn, { delayMs = 50, sleep = defaultSleep } = {}) {
-  let delivered = 0;
-  let failed = 0;
-  for (const id of userIds) {
-    try {
-      await callWith429Retry(() => sendFn(id), sleep);
-      delivered++;
-    } catch (e) {
-      failed++;
-    }
-    if (delayMs) await sleep(delayMs);
-  }
-  return { delivered, failed };
+// Сколько минут осталось до автоматического включения автоответа (для меню и /info).
+export function getAutoOffMinutesLeft(settings, now = Date.now()) {
+  const until = Number(settings?.auto_off_until) || 0;
+  if (!until) return 0;
+  return Math.max(1, Math.ceil((until - now) / 60000));
 }

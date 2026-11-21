@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { BoundedCache } from '../lib/cache.js';
+import { BoundedCache } from '../src/services/cache.js';
 
 describe('BoundedCache', () => {
   test('эвикция самых старых записей при превышении лимита', () => {

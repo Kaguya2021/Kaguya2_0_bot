@@ -5,13 +5,14 @@
 //   npm run inbox:ack -- --comments-only --ids 1,2,3
 // Флаги: --comments-only, --errors-only, --ids, --limit N (по умолчанию 100).
 import { writeFile } from 'node:fs/promises';
-import { db, closeDb } from '../database.js';
-import { parseInboxArgs, formatInboxReport } from '../lib/inbox.js';
+import { config } from '../src/config.js';
+import { db, closeDb } from '../src/db/index.js';
+import { parseInboxArgs, formatInboxReport } from '../src/services/inbox.js';
 
 async function main() {
   const opts = parseInboxArgs(process.argv.slice(2));
   if (opts.error) throw new Error(opts.error);
-  if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL не задан в .env');
+  if (!config.databaseUrl) throw new Error('DATABASE_URL не задан в .env');
 
   const wantComments = !opts.errorsOnly;
   const wantErrors = !opts.commentsOnly;

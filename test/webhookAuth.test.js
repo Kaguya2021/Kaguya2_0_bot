@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { createWebhookSecretMiddleware, safeEqual, SECRET_HEADER } from '../lib/webhookAuth.js';
+import { createWebhookSecretMiddleware, safeEqual, SECRET_HEADER } from '../src/services/webhook.js';
 
 function mockReq(headers = {}) {
   const lower = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));

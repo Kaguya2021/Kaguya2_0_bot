@@ -4,13 +4,10 @@
 // ВАЖНО: скрипт НИКОГДА не публикует в канал и не читает TARGET_CHANNEL_ID.
 // Превью уходит только в личку админу; публикация — только по кнопке в боте.
 import { readFile } from 'node:fs/promises';
-import dotenv from 'dotenv';
 import { Api } from 'grammy';
-import { db, closeDb } from '../database.js';
-import { parseAdminIds } from '../lib/utils.js';
-import { validateDraft, buildApprovalKeyboard, buildSendPayload } from '../lib/publishing.js';
-
-dotenv.config();
+import { config } from '../src/config.js';
+import { db, closeDb } from '../src/db/index.js';
+import { validateDraft, buildApprovalKeyboard, buildSendPayload } from '../src/services/publishing.js';
 
 function parseArgs(argv) {
   const opts = { file: null, admin: null };
@@ -25,10 +22,10 @@ function parseArgs(argv) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (!opts.file) throw new Error('Укажите путь к JSON: npm run draft:send -- drafts/example.json [--admin <ID>]');
-  if (!process.env.BOT_TOKEN) throw new Error('BOT_TOKEN не задан в .env');
-  if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL не задан в .env');
+  if (!config.botToken) throw new Error('BOT_TOKEN не задан в .env');
+  if (!config.databaseUrl) throw new Error('DATABASE_URL не задан в .env');
 
-  const adminIds = parseAdminIds(process.env.ADMIN_IDS) || [];
+  const adminIds = config.adminIdsFromEnv || [];
   const adminId = opts.admin ?? adminIds[0];
   if (!adminId || !/^\d+$/.test(adminId)) throw new Error('Не найден ID админа: задайте ADMIN_IDS в .env или --admin <ID>');
   if (adminIds.length && !adminIds.includes(adminId)) throw new Error(`ID ${adminId} не входит в ADMIN_IDS`);
@@ -46,7 +43,7 @@ async function main() {
   const saved = await db.createPostDraft({ ...draft, createdBy: adminId });
   console.log(`📝 Черновик #${saved.id} сохранён (status: ${saved.status})`);
 
-  const api = new Api(process.env.BOT_TOKEN);
+  const api = new Api(config.botToken);
   const { method, args } = buildSendPayload(draft, adminId, buildApprovalKeyboard(draft.buttons, saved.id));
   try {
     const msg = await api[method](...args);
