@@ -12,6 +12,7 @@ import { setChatRuleInCache, burnTimers } from '../bot/state.js';
 import { notifyOwner, deleteTrigger, chatTitle, RIGHTS_HINT } from './dotShared.js';
 import { AI_COMMANDS, aiHandlers } from './aiCommands.js';
 import { RP_MANAGE_COMMANDS, rpHandlers, executeRp } from './rpCommands.js';
+import { GAME_COMMANDS, gameHandlers } from './gameCommands.js';
 
 export { notifyOwner, RIGHTS_HINT };
 
@@ -39,13 +40,19 @@ export const HELP_TEXT =
   '<code>.обнять</code> <code>.поцеловать</code> <code>.погладить</code> <code>.кусь</code> <code>.пнуть</code> и др.\n' +
   '<code>.addrp .триггер текст</code> — своя RP (до 3; reply на GIF/стикер — привяжет медиа)\n' +
   '<code>.myrp</code> — ваши RP · <code>.delrp .триггер</code> — удалить\n\n' +
+  '🎮 <b>Игры</b> (кнопки в чате, жмут оба участника):\n' +
+  '<code>.saper</code> — сапёр 5×5 (4 мины, первый ход безопасен)\n' +
+  '<code>.ttt</code> — крестики-нолики: вы ❌ против собеседника ⭕\n' +
+  '<code>.rps</code> — камень-ножницы-бумага (выбор скрыт до хода обоих)\n' +
+  '<code>.tod [правда|действие]</code> — правда или действие\n\n' +
   '<code>.help</code> — эта шпаргалка';
 
 const COMMANDS = new Set(['mute', 'unmute', 'wsag', 'unwsag', 'del', 'burn', 'sw', 'calc', 'id', 'help']);
 
 // Системные команды (включая ИИ и управление RP) — их нельзя переопределить через .addrp.
 export function isKnownDotCommand(command) {
-  return COMMANDS.has(command) || AI_COMMANDS.has(command) || RP_MANAGE_COMMANDS.has(command);
+  return COMMANDS.has(command) || AI_COMMANDS.has(command) || RP_MANAGE_COMMANDS.has(command) ||
+    GAME_COMMANDS.has(command);
 }
 
 function formatNumber(n) {
@@ -211,7 +218,7 @@ const handlers = {
 };
 
 // Возвращает true, если команда распознана и обработана (дальнейшая логика не нужна).
-// Порядок: системные -> ИИ -> управление RP -> выполнение RP (кастомные, затем встроенные).
+// Порядок: системные -> ИИ -> управление RP -> игры -> выполнение RP (кастомные, затем встроенные).
 // Неизвестная .команда -> false: сообщение не трогаем, срабатывает обычная пауза автоответа.
 export async function handleDotCommand(ctx, { parsed, businessMessage, connectionId, chatId, ownerId, meta }) {
   if (!parsed?.command) return false;
@@ -230,6 +237,7 @@ export async function handleDotCommand(ctx, { parsed, businessMessage, connectio
   const handler = (COMMANDS.has(c.command) && handlers[c.command]) ||
     (AI_COMMANDS.has(c.command) && aiHandlers[c.command]) ||
     (RP_MANAGE_COMMANDS.has(c.command) && rpHandlers[c.command]) ||
+    (GAME_COMMANDS.has(c.command) && gameHandlers[c.command]) ||
     null;
   try {
     if (handler) {

@@ -243,7 +243,15 @@ export function registerBusinessHandlers(bot) {
       }
 
       // .autoai: ИИ отвечает от лица владельца (в фоне, кулдаун 5 с). Статичный автоответ не дублируем.
+      // Заблокированный владелец (blocked_until) квоту Gemini не тратит; БД недоступна — молчим.
       if (rule?.autoAiPrompt) {
+        let aiSettings;
+        try {
+          aiSettings = await getSettings(ownerId);
+        } catch (e) {
+          return;
+        }
+        if (isBlocked(aiSettings) || isGlobalStop()) return;
         runAutoAi(ctx.api, { businessMessage, connectionId, chatId, ownerId, instruction: rule.autoAiPrompt });
         return;
       }

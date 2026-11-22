@@ -4,7 +4,7 @@ import { config } from '../config.js';
 import { escapeHTML } from './html.js';
 import { getChannelUrl } from './subscription.js';
 import { isAutoReplyActive } from './schedule.js';
-import { getMainInlineKeyboard } from '../bot/keyboards.js';
+import { getMainInlineKeyboard, getAutoReplyInlineKeyboard } from '../bot/keyboards.js';
 import { HELP_TEXT } from '../handlers/dotCommands.js';
 
 export const DEFAULT_BOT_USERNAME = 'Kaguya_2_0bot';
@@ -28,6 +28,14 @@ function formatCount(n) {
   return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 }
 
+// Отображаемый счётчик: реальное число + USERS_COUNT_OFFSET. null — неизвестно.
+export function displayUsersCount(usersCount, cfg = config) {
+  if (usersCount === null || usersCount === undefined) return null;
+  const n = Number(usersCount);
+  if (!Number.isFinite(n)) return null;
+  return n + (Number(cfg?.usersCountOffset) || 0);
+}
+
 // DD.MM.YYYY с учётом смещения часового пояса пользователя (минуты).
 export function formatDate(value, offsetMin = 0) {
   const d = value instanceof Date ? value : new Date(value);
@@ -47,8 +55,9 @@ export function daysSince(value, now = Date.now()) {
 // --- Экран 1: обязательная подписка ---
 export function buildSubscriptionScreen({ usersCount = null, cfg = config } = {}) {
   const url = getChannelUrl(cfg);
-  const countLine = Number(usersCount) > 0
-    ? `\n\n⚡ Уже с нами: <b>${formatCount(usersCount)}</b> ${pluralUsers(usersCount)}`
+  const shown = displayUsersCount(usersCount, cfg);
+  const countLine = shown > 0
+    ? `\n\n⚡ Уже с нами: <b>${formatCount(shown)}</b> ${pluralUsers(shown)}`
     : '';
   const text =
     '<blockquote>📢 <b>Обязательная подписка</b>\n\n' +
@@ -60,7 +69,7 @@ export function buildSubscriptionScreen({ usersCount = null, cfg = config } = {}
   const kb = new InlineKeyboard();
   if (url) kb.url('📢 Подписаться на канал', url);
   kb.text('✅ Проверить подписку', 'check_sub');
-  return { text, reply_markup: kb };
+  return { text, reply_markup: kb, banner: true };
 }
 
 // --- Экран 2: подключение бизнес-бота ---
@@ -91,20 +100,26 @@ export function buildOnboardingScreen({ botUsername = DEFAULT_BOT_USERNAME, cfg 
     .text('🔄 Проверить подключение', 'check_connection');
   if (cfg.guideUrl) kb.url('📖 Инструкция', cfg.guideUrl);
   kb.row().text('🏠 Главное меню', 'open_main_menu');
-  return { text, reply_markup: kb };
+  return { text, reply_markup: kb, banner: true };
 }
 
 // --- Экран 3: главное меню с карточкой профиля ---
 // connection: { connected, canDeleteAll } | null (null — статус неизвестен, БД недоступна)
-export function buildMainMenuScreen({ userId, settings = {}, profile = null, usersCount = null, connection = null, now = Date.now() } = {}) {
+export function buildMainMenuScreen({
+  userId, settings = {}, profile = null, usersCount = null, connection = null, now = Date.now(), cfg = config
+} = {}) {
   const lines = ['👤 <b>Профиль</b>'];
 
   if (profile?.created_at) {
     const date = formatDate(profile.created_at, settings.timezone_offset_min);
     const days = daysSince(profile.created_at, now);
-    if (date) lines.push(`📅 Первое появление: <b>${date}</b>${days !== null ? ` (с нами ${days} дн.)` : ''}`);
+    if (date) {
+      const since = days === null ? '' : days === 0 ? ' (сегодня)' : ` (${days} дн.)`;
+      lines.push(`📅 В боте с <b>${date}</b>${since}`);
+    }
   }
-  if (Number(usersCount) > 0) lines.push(`👥 Пользователей в боте: <b>${formatCount(usersCount)}</b>`);
+  const shown = displayUsersCount(usersCount, cfg);
+  if (shown > 0) lines.push(`👥 Пользователей: <b>${formatCount(shown)}</b>`);
 
   let botLine = '🤖 Бизнес-бот: ';
   if (connection?.connected) {
@@ -119,15 +134,35 @@ export function buildMainMenuScreen({ userId, settings = {}, profile = null, use
 
   const antiDeleteOn = settings.anti_delete_enabled !== false;
   lines.push(
-    `💬 Автоответчик: <b>${isAutoReplyActive(settings) ? 'ВКЛ' : 'ВЫКЛ'}</b> · ` +
+    `💬 Автоответ: <b>${isAutoReplyActive(settings) ? 'ВКЛ' : 'ВЫКЛ'}</b> · ` +
     `👁 Анти-удаление: <b>${antiDeleteOn ? 'ВКЛ' : 'ВЫКЛ'}</b>`
   );
 
-  let text = '🚀 <b>Главное меню</b>\n\n<blockquote>' + lines.join('\n') + '</blockquote>';
+  let text = '✨ <b>Kaguya 2.0</b>\n\n<blockquote>' + lines.join('\n') + '</blockquote>';
   if (antiDeleteOn) {
-    text += '\n\n<i>Все входящие удалённые и отредактированные сообщения сохраняются в реальном времени.</i>';
+    text += '\n\n<i>Удалённые и изменённые сообщения сохраняются в реальном времени.</i>';
   }
-  return { text, reply_markup: getMainInlineKeyboard(userId, settings) };
+  return { text, reply_markup: getMainInlineKeyboard(userId, settings, cfg), banner: true };
+}
+
+function describeCustomReply(reply) {
+  if (!reply) return 'стандартный';
+  if (reply.startsWith('combo:')) return 'свой · комбо';
+  if (reply.startsWith('voice:')) return 'свой · голосовое';
+  return 'свой · текст';
+}
+
+// --- Подменю «Автоответчик» ---
+export function buildAutoReplyMenuScreen({ settings = {} } = {}) {
+  const active = isAutoReplyActive(settings);
+  const timerOn = settings.timer_mode === true;
+  const text =
+    '💬 <b>Автоответчик</b>\n\n<blockquote>' +
+    `Статус: <b>${active ? '🟢 Включён' : '🔕 Выключен'}</b>\n` +
+    `⏱ Таймер 15 мин: <b>${timerOn ? 'ВКЛ' : 'ОТКЛ'}</b>\n` +
+    `📝 Ответ: <b>${describeCustomReply(settings.custom_reply)}</b>` +
+    '</blockquote>';
+  return { text, reply_markup: getAutoReplyInlineKeyboard(settings) };
 }
 
 // --- Справка по .командам ---

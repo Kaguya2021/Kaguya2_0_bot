@@ -3,13 +3,14 @@ import { isAdmin } from '../config.js';
 import { db } from '../db/index.js';
 import { escapeHTML } from '../services/html.js';
 import { isAutoReplyActive } from '../services/schedule.js';
-import { getMainInlineKeyboard, getSettingsInlineKeyboard } from '../bot/keyboards.js';
+import { getMainInlineKeyboard, getSettingsInlineKeyboard, getAutoReplyInlineKeyboard } from '../bot/keyboards.js';
 import { stepState, getSettings, getSettingsSafe, patchSettings } from '../bot/state.js';
 import { timeHelpText } from './commands.js';
 import { showAdminPanel } from './admin.js';
 import { checkUserSubscription, isSubscriptionGateActive } from '../services/subscription.js';
 import {
-  showSubscription, showOnboarding, showMainMenu, showDotCommands, showEntryScreen, getConnectionStatusSafe
+  showSubscription, showOnboarding, showMainMenu, showDotCommands, showEntryScreen, getConnectionStatusSafe,
+  showAutoReplyMenu
 } from '../bot/menu.js';
 
 const AUTO_OFF_DURATION = 5 * 60 * 1000;
@@ -17,12 +18,19 @@ const AUTO_OFF_DURATION = 5 * 60 * 1000;
 // Callback'и, которые не проходят через гейт подписки.
 const GATE_EXEMPT = new Set(['check_sub']);
 
+// Бизнес-колбэки (кнопки под сообщениями бота в бизнес-чатах) и игры g:* гейт не проверяет никогда.
+export function isGateExemptCallback(cq) {
+  const data = cq?.data || '';
+  return GATE_EXEMPT.has(data) || data.startsWith('g:') ||
+    Boolean(cq?.business_connection_id || cq?.message?.business_connection_id);
+}
+
 export function registerCallbackHandlers(bot) {
   // ===== ГЕЙТ ОБЯЗАТЕЛЬНОЙ ПОДПИСКИ (только личка) =====
   // Админские draft_* зарегистрированы раньше (admin.js) и сюда не доходят.
   // Для подписанных — ответ из кэша (0 запросов к Bot API в пределах 10 минут).
   bot.on('callback_query:data', async (ctx, next) => {
-    if (ctx.chat?.type !== 'private' || !isSubscriptionGateActive() || GATE_EXEMPT.has(ctx.callbackQuery.data)) {
+    if (ctx.chat?.type !== 'private' || !isSubscriptionGateActive() || isGateExemptCallback(ctx.callbackQuery)) {
       return next();
     }
     const sub = await checkUserSubscription(ctx.api, ctx.from.id);
@@ -77,6 +85,11 @@ export function registerCallbackHandlers(bot) {
     await showMainMenu(ctx, { edit: true });
   });
 
+  bot.callbackQuery('open_autoreply_menu', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await showAutoReplyMenu(ctx, { edit: true });
+  });
+
   bot.callbackQuery('show_dot_commands', async (ctx) => {
     await ctx.answerCallbackQuery();
     await showDotCommands(ctx, { edit: true });
@@ -129,9 +142,14 @@ export function registerCallbackHandlers(bot) {
         ? '⏱ Включено: 1 автоответ раз в 15 минут на чат.'
         : '⛔ Выключено: автоответ снова на каждое сообщение.'
     });
+    // Перерисовываем подменю автоответчика (статус + кнопка таймера); при сбое — хотя бы кнопки.
     try {
-      await ctx.editMessageReplyMarkup({ reply_markup: getMainInlineKeyboard(userId, { ...(await getSettingsSafe(userId)), timer_mode: next }) });
-    } catch (e) {}
+      await showAutoReplyMenu(ctx, { edit: true });
+    } catch (e) {
+      try {
+        await ctx.editMessageReplyMarkup({ reply_markup: getAutoReplyInlineKeyboard({ ...(await getSettingsSafe(userId)), timer_mode: next }) });
+      } catch (e2) {}
+    }
   });
 
   bot.callbackQuery('set_text', async (ctx) => {
@@ -152,7 +170,7 @@ export function registerCallbackHandlers(bot) {
     await ctx.reply('✍️ <b>Шаг 1/2:</b> Напишите текст, который должен отправляться со стикером:', { parse_mode: 'HTML' });
   });
 
-  bot.callbackQuery('my_reply', async (ctx) => {
+  bot.callbackQuery(['my_reply', 'show_my'], async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = String(ctx.from.id);
     let currentReply;
@@ -204,7 +222,7 @@ export function registerCallbackHandlers(bot) {
 
   // ===== НАСТРОЙКИ: ПРИВЯЗКА АВТООТВЕТА К КОНКРЕТНОМУ АККАУНТУ =====
 
-  bot.callbackQuery('settings_menu', async (ctx) => {
+  bot.callbackQuery(['settings_menu', 'open_settings'], async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = String(ctx.from.id);
     let settings;
@@ -267,6 +285,6 @@ export function registerCallbackHandlers(bot) {
 
   bot.callbackQuery('settings_back', async (ctx) => {
     await ctx.answerCallbackQuery();
-    await showMainMenu(ctx);
+    await showMainMenu(ctx, { edit: true });
   });
 }

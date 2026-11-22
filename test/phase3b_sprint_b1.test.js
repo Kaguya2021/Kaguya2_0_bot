@@ -67,7 +67,7 @@ describe('config и миграция 005', () => {
     assert.equal(config.aiDailyLimit, 25);
     const d = loadConfig({});
     assert.equal(d.geminiApiKey, '');
-    assert.equal(d.geminiModel, 'gemini-2.5-flash');
+    assert.equal(d.geminiModel, 'gemini-3.5-flash');
     assert.equal(d.aiDailyLimit, 25);
     assert.equal(loadConfig({ AI_DAILY_LIMIT: ' 7 ', GEMINI_API_KEY: ' k ', GEMINI_MODEL: ' m ' }).aiDailyLimit, 7);
     assert.equal(loadConfig({ GEMINI_API_KEY: ' k ' }).geminiApiKey, 'k');

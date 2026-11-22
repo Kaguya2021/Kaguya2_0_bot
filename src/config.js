@@ -19,7 +19,7 @@ export function parseAdminIds(raw) {
 
 // Чистая функция: env -> объект конфига (тестируется без побочных эффектов).
 // Ссылка на гайд по подключению, если GUIDE_URL не задан.
-export const DEFAULT_GUIDE_URL = 'https://kaguya-gospoja.onrender.com';
+export const DEFAULT_GUIDE_URL = 'https://threatux.github.io/kaguya-site/';
 
 // Положительное целое из env, иначе дефолт.
 export function parsePositiveInt(raw, fallback) {
@@ -27,7 +27,21 @@ export function parsePositiveInt(raw, fallback) {
   return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
-export const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+// Неотрицательное целое из env, иначе дефолт.
+export function parseNonNegativeInt(raw, fallback = 0) {
+  const str = String(raw ?? '').trim();
+  if (!str) return fallback;
+  const n = Number(str);
+  return Number.isInteger(n) && n >= 0 ? n : fallback;
+}
+
+// Только https://-ссылка, иначе ''.
+export function parseHttpsUrl(raw) {
+  const url = String(raw ?? '').trim();
+  return /^https:\/\/\S+$/.test(url) ? url : '';
+}
+
+export const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
 export const DEFAULT_AI_DAILY_LIMIT = 25;
 
 export function loadConfig(env = {}) {
@@ -53,7 +67,11 @@ export function loadConfig(env = {}) {
     // Gemini AI (.ai/.autoai/.dialog/.kawaii). Пустой ключ — ИИ-команды отключены.
     geminiApiKey: (env.GEMINI_API_KEY || '').trim(),
     geminiModel: (env.GEMINI_MODEL || '').trim() || DEFAULT_GEMINI_MODEL,
-    aiDailyLimit: parsePositiveInt(env.AI_DAILY_LIMIT, DEFAULT_AI_DAILY_LIMIT)
+    aiDailyLimit: parsePositiveInt(env.AI_DAILY_LIMIT, DEFAULT_AI_DAILY_LIMIT),
+    // Прибавка к отображаемому счётчику пользователей (меню / экран подписки).
+    usersCountOffset: parseNonNegativeInt(env.USERS_COUNT_OFFSET, 0),
+    // Баннер меню через link preview (картинка грузится Telegram'ом, 0 нагрузки на сервер). '' — выключен.
+    menuBannerUrl: parseHttpsUrl(env.MENU_BANNER_URL)
   });
 }
 
