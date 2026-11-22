@@ -7,10 +7,81 @@ import { getMainInlineKeyboard, getSettingsInlineKeyboard } from '../bot/keyboar
 import { stepState, getSettings, getSettingsSafe, patchSettings } from '../bot/state.js';
 import { timeHelpText } from './commands.js';
 import { showAdminPanel } from './admin.js';
+import { checkUserSubscription, isSubscriptionGateActive } from '../services/subscription.js';
+import {
+  showSubscription, showOnboarding, showMainMenu, showDotCommands, showEntryScreen, getConnectionStatusSafe
+} from '../bot/menu.js';
 
 const AUTO_OFF_DURATION = 5 * 60 * 1000;
 
+// Callback'и, которые не проходят через гейт подписки.
+const GATE_EXEMPT = new Set(['check_sub']);
+
 export function registerCallbackHandlers(bot) {
+  // ===== ГЕЙТ ОБЯЗАТЕЛЬНОЙ ПОДПИСКИ (только личка) =====
+  // Админские draft_* зарегистрированы раньше (admin.js) и сюда не доходят.
+  // Для подписанных — ответ из кэша (0 запросов к Bot API в пределах 10 минут).
+  bot.on('callback_query:data', async (ctx, next) => {
+    if (ctx.chat?.type !== 'private' || !isSubscriptionGateActive() || GATE_EXEMPT.has(ctx.callbackQuery.data)) {
+      return next();
+    }
+    const sub = await checkUserSubscription(ctx.api, ctx.from.id);
+    if (sub.subscribed) return next();
+    await ctx.answerCallbackQuery({ text: 'Сначала подпишитесь на канал.' }).catch(() => {});
+    await showSubscription(ctx, { edit: true });
+  });
+
+  // ===== ВОРОНКА: ПОДПИСКА, ПОДКЛЮЧЕНИЕ, ГЛАВНОЕ МЕНЮ =====
+
+  bot.callbackQuery('check_sub', async (ctx) => {
+    const sub = await checkUserSubscription(ctx.api, ctx.from.id, { force: true });
+    if (!sub.subscribed) {
+      return await ctx.answerCallbackQuery({
+        text: 'Подписка на канал не найдена. Подпишитесь и нажмите снова.',
+        show_alert: true
+      });
+    }
+    await ctx.answerCallbackQuery({ text: '✅ Подписка подтверждена!' });
+    await showEntryScreen(ctx, { edit: true });
+  });
+
+  bot.callbackQuery('check_connection', async (ctx) => {
+    const userId = String(ctx.from.id);
+    const status = await getConnectionStatusSafe(userId);
+    if (!status) {
+      return await ctx.answerCallbackQuery({ text: '⚠️ База данных недоступна, попробуйте ещё раз.', show_alert: true });
+    }
+    if (!status.connected) {
+      return await ctx.answerCallbackQuery({
+        text: 'Подключение пока не обнаружено. Добавьте бота в Telegram Business → Чат-боты ' +
+          '(или напишите любое сообщение в чате, если бот уже подключён).',
+        show_alert: true
+      });
+    }
+    await ctx.answerCallbackQuery(status.canDeleteAll
+      ? { text: '✅ Бизнес-бот активен!' }
+      : {
+        text: '✅ Бизнес-бот активен!\n\nДля .mute и .del включите право «Удаление всех сообщений» в Telegram Business → Чат-боты.',
+        show_alert: true
+      });
+    await showMainMenu(ctx, { edit: true, connection: status });
+  });
+
+  bot.callbackQuery('open_onboarding', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await showOnboarding(ctx, { edit: true });
+  });
+
+  bot.callbackQuery('open_main_menu', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await showMainMenu(ctx, { edit: true });
+  });
+
+  bot.callbackQuery('show_dot_commands', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await showDotCommands(ctx, { edit: true });
+  });
+
   // ===== ОБРАБОТЧИКИ INLINE-КНОПОК ГЛАВНОГО МЕНЮ =====
 
   bot.callbackQuery('toggle_autoreply', async (ctx) => {
@@ -32,9 +103,14 @@ export function registerCallbackHandlers(bot) {
     patchSettings(userId, { auto_off_until: until });
 
     await ctx.answerCallbackQuery({ text: turnOff ? '🔕 Автоответчик выключен на 5 минут' : '🔔 Автоответчик включен!' });
+    // Перерисовываем карточку меню (статус автоответчика в тексте); при сбое — хотя бы кнопки.
     try {
-      await ctx.editMessageReplyMarkup({ reply_markup: getMainInlineKeyboard(userId, await getSettingsSafe(userId)) });
-    } catch (e) {}
+      await showMainMenu(ctx, { edit: true });
+    } catch (e) {
+      try {
+        await ctx.editMessageReplyMarkup({ reply_markup: getMainInlineKeyboard(userId, await getSettingsSafe(userId)) });
+      } catch (e2) {}
+    }
   });
 
   bot.callbackQuery('toggle_timer_mode', async (ctx) => {
@@ -191,10 +267,6 @@ export function registerCallbackHandlers(bot) {
 
   bot.callbackQuery('settings_back', async (ctx) => {
     await ctx.answerCallbackQuery();
-    const userId = String(ctx.from.id);
-    await ctx.reply('🚀 <b>Главное меню автоответчика:</b>', {
-      parse_mode: 'HTML',
-      reply_markup: getMainInlineKeyboard(userId, await getSettingsSafe(userId))
-    });
+    await showMainMenu(ctx);
   });
 }

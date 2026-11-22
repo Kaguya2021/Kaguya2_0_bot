@@ -52,6 +52,26 @@ export const businessRepo = {
     };
   },
 
+  // Статус подключения бизнес-бота для экрана меню (самая свежая активная запись владельца).
+  getOwnerConnectionStatus: async (ownerId) => {
+    await ensureSchema();
+    const res = await sql`
+      SELECT can_reply, can_delete_sent_messages, can_delete_all_messages, updated_at
+      FROM business_connections
+      WHERE owner_id = ${String(ownerId)} AND is_enabled = true
+      ORDER BY updated_at DESC LIMIT 1;
+    `;
+    const r = res[0];
+    if (!r) return { connected: false, canReply: false, canDeleteSent: false, canDeleteAll: false, updatedAt: null };
+    return {
+      connected: true,
+      canReply: r.can_reply === true,
+      canDeleteSent: r.can_delete_sent_messages === true,
+      canDeleteAll: r.can_delete_all_messages === true,
+      updatedAt: r.updated_at ?? null
+    };
+  },
+
   setChatRule: async (ownerId, chatId, { isMuted, deleteStickersGifs } = {}) => {
     await ensureSchema();
     // undefined — не менять поле (COALESCE со старым значением).

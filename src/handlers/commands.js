@@ -11,8 +11,9 @@ import {
   isBlocked,
   getAutoOffMinutesLeft
 } from '../services/schedule.js';
-import { getMainInlineKeyboard, getWelcomeInlineKeyboard } from '../bot/keyboards.js';
 import { stepState, getSettings, getSettingsSafe, patchSettings, saveReply } from '../bot/state.js';
+import { checkUserSubscription } from '../services/subscription.js';
+import { showSubscription, showEntryScreen } from '../bot/menu.js';
 
 export function tzInfoText(settings) {
   const offset = settings?.timezone_offset_min || 0;
@@ -44,23 +45,12 @@ export function registerCommandHandlers(bot) {
       await ctx.api.deleteMessage(ctx.chat.id, cleanup.message_id);
     } catch (e) {}
 
-    const welcomeText =
-      '👋 <b>Привет! Я бот Кагуя 2.0.</b>\n\n' +
-      '⚙️ Я работающий автоответчик для вашего Telegram Business!\n\n' +
-      '📢 <b>Наш официальный канал:</b> <a href="https://t.me/kaguya_2_0_bots">Kaguya 2.0 Channel</a>\n' +
-      '<i>Подпишитесь, чтобы быть в курсе всех обновлений и новостей!</i>\n\n' +
-      '👇 <b>Используйте удобное меню ниже для настройки:</b>';
-
-    await ctx.reply(welcomeText, {
-      parse_mode: 'HTML',
-      reply_markup: getWelcomeInlineKeyboard(),
-      disable_web_page_preview: true
-    });
-
-    await ctx.reply('🚀 <b>Главное меню автоответчика:</b>', {
-      parse_mode: 'HTML',
-      reply_markup: getMainInlineKeyboard(userId, await getSettingsSafe(userId))
-    });
+    // Воронка (только личка): подписка на канал -> подключение бизнес-бота -> главное меню.
+    if (ctx.chat?.type === 'private') {
+      const sub = await checkUserSubscription(ctx.api, userId);
+      if (!sub.subscribed) return showSubscription(ctx);
+    }
+    await showEntryScreen(ctx);
   });
 
   bot.command('my', async (ctx) => {

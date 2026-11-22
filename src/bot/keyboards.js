@@ -21,7 +21,8 @@ export function getMainInlineKeyboard(userId, settings) {
     .text('🖼️ Комбо (Текст + Стикер)', 'set_combo').text('🔍 Мой автоответ', 'my_reply').row()
     .text('⏰ Настроить время', 'set_time').text('🗑️ Сбросить', 'reset_reply').row()
     .text(timerButtonText, 'toggle_timer_mode').row()
-    .text('⚙️ Настройки', 'settings_menu').row();
+    .text('⚙️ Настройки', 'settings_menu').row()
+    .text('⚡ .команды', 'show_dot_commands').text('🔌 Подключение', 'open_onboarding').row();
 
   if (isAdmin(userId)) {
     kb.text('🔒 ADMINPPA', 'admin_panel').row();

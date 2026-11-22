@@ -60,6 +60,19 @@ export const usersRepo = {
     return res[0] || null;
   },
 
+  // Карточка профиля в главном меню.
+  getUserProfile: async (userId) => {
+    await ensureSchema();
+    const res = await sql`SELECT user_id, username, created_at FROM users WHERE user_id = ${String(userId)};`;
+    return res[0] || null;
+  },
+
+  getUsersCount: async () => {
+    await ensureSchema();
+    const res = await sql`SELECT COUNT(*)::int AS count FROM users;`;
+    return Number(res[0]?.count) || 0;
+  },
+
   setCustomReply: async (userId, reply) => {
     await ensureSchema();
     return sql`

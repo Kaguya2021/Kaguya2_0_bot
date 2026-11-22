@@ -187,3 +187,35 @@ export async function saveReply(ctx, userId, value) {
     return false;
   }
 }
+
+// --- Счётчик пользователей (меню / экран подписки) ---
+// Кэш в памяти на 5 минут: COUNT(*) не дёргается на каждый /start. Ошибка БД не роняет рендер.
+export const USERS_COUNT_TTL = 5 * 60 * 1000;
+let usersCount = null;
+let usersCountAt = 0;
+let usersCountPromise = null;
+
+export async function getUsersCountCached({ force = false } = {}) {
+  if (!force && usersCount !== null && Date.now() - usersCountAt < USERS_COUNT_TTL) return usersCount;
+  if (!usersCountPromise) {
+    usersCountPromise = (async () => {
+      try {
+        const n = Number(await db.getUsersCount());
+        if (Number.isFinite(n)) {
+          usersCount = n;
+          usersCountAt = Date.now();
+        }
+      } catch (e) {
+        // последнее известное значение (или null)
+      }
+      return usersCount;
+    })().finally(() => { usersCountPromise = null; });
+  }
+  return usersCountPromise;
+}
+
+export function clearUsersCountCache() {
+  usersCount = null;
+  usersCountAt = 0;
+  usersCountPromise = null;
+}
