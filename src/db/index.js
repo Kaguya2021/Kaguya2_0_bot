@@ -6,10 +6,10 @@ import { channelRepo } from './channelRepo.js';
 import { businessRepo } from './businessRepo.js';
 
 // Не повторяем: лог ошибок и кэш бизнес-сообщений/очистка (best-effort),
-// INSERT черновика и атомарный захват черновика.
+// INSERT черновика и атомарный захват черновика, инкремент квоты ИИ (повтор = двойное списание).
 export const NO_RETRY = new Set([
   'saveErrorLog', 'createPostDraft', 'claimDraftForPublishing',
-  'saveCachedBusinessMessage', 'pruneOldBusinessMessages'
+  'saveCachedBusinessMessage', 'pruneOldBusinessMessages', 'incrementAiUsage'
 ]);
 
 const rawDb = { ...usersRepo, ...stateRepo, ...channelRepo, ...businessRepo };

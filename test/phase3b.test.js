@@ -249,6 +249,7 @@ Object.assign(db, {
       (!beforeMessageId || m.message_id < beforeMessageId) && (!senderId || m.sender_id === senderId))
       .map(([, m]) => m.message_id).sort((a, b) => b - a).slice(0, limit),
   pruneOldBusinessMessages: async () => 0,
+  listCustomRp: async () => [],
   getBotState: async () => null,
   getUserSettings: async (userId) => ({ ...DEFAULT_USER_SETTINGS, ...(store.settings.get(userId) || {}) }),
   setAntiDeleteEnabled: async (userId, enabled) => {
@@ -342,7 +343,7 @@ describe('Business: .команды, мут, анти-удаление', () => {
 
     const mute = businessMsg(PEER, ownerUser, { text: '.mute' });
     await bot.handleUpdate(mute.update);
-    assert.deepEqual(getChatRule(OWNER, String(PEER)), { isMuted: true, deleteStickersGifs: false });
+    assert.deepEqual(getChatRule(OWNER, String(PEER)), { isMuted: true, deleteStickersGifs: false, autoAiPrompt: null, kawaiiEnabled: false });
     assert.deepEqual(store.rules.get(`${OWNER}:${PEER}`), { isMuted: true, deleteStickersGifs: false });
     assert.ok(deletes(calls).includes(mute.id), 'триггер .mute удалён');
     const dm = sentTo(calls, OWNER);
@@ -391,7 +392,7 @@ describe('Business: .команды, мут, анти-удаление', () => {
     const { bot, calls } = makeBot();
     await bot.handleUpdate(connectionUpdate());
     await bot.handleUpdate(businessMsg(PEER, ownerUser, { text: '.wsag' }).update);
-    assert.deepEqual(getChatRule(OWNER, String(PEER)), { isMuted: false, deleteStickersGifs: true });
+    assert.deepEqual(getChatRule(OWNER, String(PEER)), { isMuted: false, deleteStickersGifs: true, autoAiPrompt: null, kawaiiEnabled: false });
 
     const sticker = businessMsg(PEER, peerUser(PEER), { sticker: { file_id: 's', file_unique_id: 's', type: 'regular', width: 1, height: 1, is_animated: false, is_video: false, emoji: '😀' } });
     const gif = businessMsg(PEER, peerUser(PEER), { animation: { file_id: 'g', file_unique_id: 'g', width: 1, height: 1, duration: 1 }, document: { file_id: 'g', file_unique_id: 'g' } });
@@ -535,7 +536,7 @@ describe('Business: .команды, мут, анти-удаление', () => {
     store.rules.set(`${OWNER}:8001`, { isMuted: true, deleteStickersGifs: false });
     store.rules.set(`${OWNER}:8002`, { isMuted: false, deleteStickersGifs: false });
     await loadBotState({ pruning: false });
-    assert.deepEqual(getChatRule(OWNER, '8001'), { isMuted: true, deleteStickersGifs: false });
+    assert.deepEqual(getChatRule(OWNER, '8001'), { isMuted: true, deleteStickersGifs: false, autoAiPrompt: null, kawaiiEnabled: false });
     assert.equal(getChatRule(OWNER, '8002'), null);
     setChatRuleInCache(OWNER, '8001', { isMuted: false });
     assert.equal(getChatRule(OWNER, '8001'), null);

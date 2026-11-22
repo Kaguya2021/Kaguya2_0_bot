@@ -1,6 +1,6 @@
 // In-memory состояние бота: ограниченные кэши, global_stop и хелперы настроек пользователя.
 import { db, DEFAULT_USER_SETTINGS } from '../db/index.js';
-import { createBotCaches, stopCachesCleanup } from '../services/cache.js';
+import { createBotCaches, stopCachesCleanup, BoundedCache } from '../services/cache.js';
 import { stopDeleteQueue } from '../services/deleteQueue.js';
 
 const caches = createBotCaches();
@@ -38,29 +38,45 @@ export function stopCacheCleanup() {
   pruningStarted = false;
   for (const t of burnTimers) clearTimeout(t);
   burnTimers.clear();
+  customRpCache.clear();
   stopDeleteQueue();
 }
 
-// --- Правила чатов (мут / автоудаление стикеров и GIF) ---
+// --- Правила чатов (мут / стикеры и GIF / .autoai / .kawaii) ---
 // Полная in-memory копия активных chat_rules: проверка на горячем пути — 0 SQL-запросов.
 // Map без TTL: активных правил немного, а потеря записи = молча выключенный мут.
-const chatRules = new Map(); // `${ownerId}:${chatId}` -> { isMuted, deleteStickersGifs }
+const chatRules = new Map(); // `${ownerId}:${chatId}` -> { isMuted, deleteStickersGifs, autoAiPrompt, kawaiiEnabled }
 const touchedBeforeLoad = new Set(); // ключи, изменённые до завершения загрузки из БД
 let chatRulesLoaded = false;
 
 const ruleKey = (ownerId, chatId) => `${ownerId}:${chatId}`;
+
+const EMPTY_RULE = Object.freeze({ isMuted: false, deleteStickersGifs: false, autoAiPrompt: null, kawaiiEnabled: false });
+
+function normalizeRule(r) {
+  const prompt = typeof r?.autoAiPrompt === 'string' && r.autoAiPrompt.trim() ? r.autoAiPrompt : null;
+  return {
+    isMuted: r?.isMuted === true,
+    deleteStickersGifs: r?.deleteStickersGifs === true,
+    autoAiPrompt: prompt,
+    kawaiiEnabled: r?.kawaiiEnabled === true
+  };
+}
+
+const isRuleActive = (r) => r.isMuted || r.deleteStickersGifs || r.autoAiPrompt !== null || r.kawaiiEnabled;
 
 export function getChatRule(ownerId, chatId) {
   return chatRules.get(ruleKey(ownerId, chatId)) || null;
 }
 
 // Синхронно обновляет кэш после успешной записи в БД. Неактивное правило удаляется.
+// Поле со значением undefined не меняется; autoAiPrompt: null — сброс.
 export function setChatRuleInCache(ownerId, chatId, rule) {
   const key = ruleKey(ownerId, chatId);
   if (!chatRulesLoaded) touchedBeforeLoad.add(key);
-  const merged = { isMuted: false, deleteStickersGifs: false, ...(chatRules.get(key) || {}), ...(rule || {}) };
-  const next = { isMuted: merged.isMuted === true, deleteStickersGifs: merged.deleteStickersGifs === true };
-  if (next.isMuted || next.deleteStickersGifs) chatRules.set(key, next);
+  const patch = Object.fromEntries(Object.entries(rule || {}).filter(([, v]) => v !== undefined));
+  const next = normalizeRule({ ...EMPTY_RULE, ...(chatRules.get(key) || {}), ...patch });
+  if (isRuleActive(next)) chatRules.set(key, next);
   else chatRules.delete(key);
   return next;
 }
@@ -77,7 +93,8 @@ async function loadChatRules() {
     for (const r of rules) {
       const key = ruleKey(r.ownerId, r.chatId);
       if (touchedBeforeLoad.has(key)) continue; // локальная запись свежее
-      chatRules.set(key, { isMuted: r.isMuted === true, deleteStickersGifs: r.deleteStickersGifs === true });
+      const rule = normalizeRule(r);
+      if (isRuleActive(rule)) chatRules.set(key, rule);
     }
     chatRulesLoaded = true;
     touchedBeforeLoad.clear();
@@ -88,6 +105,25 @@ async function loadChatRules() {
       loadChatRules();
     }, RULES_RETRY_DELAY));
   }
+}
+
+// --- Кастомные RP-команды: ownerId -> Map<trigger, { trigger, action_text, media_file_id, media_type }> ---
+// Без фонового таймера: TTL ленивый + лимит размера.
+export const customRpCache = new BoundedCache({ maxSize: 2000, ttlMs: 10 * 60 * 1000 });
+
+// Кэш -> БД. При ошибке БД бросает (в кэш не пишем).
+export async function getOwnerCustomRp(ownerId) {
+  const key = String(ownerId);
+  const cached = customRpCache.get(key);
+  if (cached) return cached;
+  const rows = await db.listCustomRp(key);
+  const map = new Map((rows || []).map((r) => [r.trigger, r]));
+  customRpCache.set(key, map);
+  return map;
+}
+
+export function invalidateOwnerCustomRp(ownerId) {
+  customRpCache.delete(String(ownerId));
 }
 
 // Очистка business_messages_cache старше 7 дней (best-effort, не блокирует старт).

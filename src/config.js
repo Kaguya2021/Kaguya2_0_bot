@@ -21,6 +21,15 @@ export function parseAdminIds(raw) {
 // Ссылка на гайд по подключению, если GUIDE_URL не задан.
 export const DEFAULT_GUIDE_URL = 'https://kaguya-gospoja.onrender.com';
 
+// Положительное целое из env, иначе дефолт.
+export function parsePositiveInt(raw, fallback) {
+  const n = Number(String(raw ?? '').trim());
+  return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+
+export const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+export const DEFAULT_AI_DAILY_LIMIT = 25;
+
 export function loadConfig(env = {}) {
   const adminIdsFromEnv = parseAdminIds(env.ADMIN_IDS);
   const targetChannelId = (env.TARGET_CHANNEL_ID || '').trim();
@@ -40,7 +49,11 @@ export function loadConfig(env = {}) {
     discussionGroupId: (env.DISCUSSION_GROUP_ID || '').trim(),
     renderUrl: env.RENDER_EXTERNAL_URL || DEFAULT_RENDER_URL,
     port: env.PORT || 3000,
-    usePolling: env.USE_POLLING === 'true'
+    usePolling: env.USE_POLLING === 'true',
+    // Gemini AI (.ai/.autoai/.dialog/.kawaii). Пустой ключ — ИИ-команды отключены.
+    geminiApiKey: (env.GEMINI_API_KEY || '').trim(),
+    geminiModel: (env.GEMINI_MODEL || '').trim() || DEFAULT_GEMINI_MODEL,
+    aiDailyLimit: parsePositiveInt(env.AI_DAILY_LIMIT, DEFAULT_AI_DAILY_LIMIT)
   });
 }
 

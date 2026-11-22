@@ -24,6 +24,7 @@ import {
   waitBotStateReady
 } from '../bot/state.js';
 import { handleDotCommand, notifyOwner, RIGHTS_HINT } from './dotCommands.js';
+import { runKawaii, runAutoAi } from './aiCommands.js';
 
 const PAUSE_DURATION = 10 * 60 * 1000;
 const ANTI_SPAM_PAUSE = 3000;              // без режима "Таймер": обычная защита от дублей (~3 сек)
@@ -219,6 +220,10 @@ export function registerBusinessHandlers(bot) {
           }
         }
         cacheMessage(businessMessage, connectionId, chatId, ownerId);
+        // .kawaii: переписать сообщение владельца (в фоне; эхо бота, .команды и >500 символов — никогда).
+        if (getChatRule(ownerId, chatId)?.kawaiiEnabled === true) {
+          runKawaii(ctx.api, { businessMessage, connectionId, chatId, ownerId });
+        }
         // Пауза автоответа в этом чате (только для этого владельца).
         localPauses.set(key, Date.now() + PAUSE_DURATION, PAUSE_DURATION);
         return;
@@ -234,6 +239,12 @@ export function registerBusinessHandlers(bot) {
       }
       if (rule?.deleteStickersGifs && (businessMessage.sticker || businessMessage.animation)) {
         queueBusinessDelete(ctx.api, connectionId, [messageId], makeDeleteErrorHandler(ctx.api, ownerId));
+        return;
+      }
+
+      // .autoai: ИИ отвечает от лица владельца (в фоне, кулдаун 5 с). Статичный автоответ не дублируем.
+      if (rule?.autoAiPrompt) {
+        runAutoAi(ctx.api, { businessMessage, connectionId, chatId, ownerId, instruction: rule.autoAiPrompt });
         return;
       }
 

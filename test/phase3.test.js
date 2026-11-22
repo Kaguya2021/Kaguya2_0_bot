@@ -58,13 +58,13 @@ const isDDL = (q) => /^(CREATE|ALTER|DROP)\b/i.test(q);
 const silent = () => {};
 
 describe('runMigrations', () => {
-  test('пустая БД: создаёт schema_migrations и применяет 001..004 по порядку', async () => {
+  test('пустая БД: создаёт schema_migrations и применяет 001..005 по порядку', async () => {
     const { sql, state } = createMockSql();
     const res = await runMigrations(sql, { log: silent });
 
-    assert.deepEqual(res.applied, ['001_initial_schema', '002_phase1_stability', '003_phase2_feedback_publishing', '004_phase3b_rules_antidelete']);
-    assert.deepEqual(state.inserted, ['001', '002', '003', '004']);
-    assert.equal(state.begins, 4, 'каждая миграция — в отдельной транзакции');
+    assert.deepEqual(res.applied, ['001_initial_schema', '002_phase1_stability', '003_phase2_feedback_publishing', '004_phase3b_rules_antidelete', '005_phase3b_ai_rp']);
+    assert.deepEqual(state.inserted, ['001', '002', '003', '004', '005']);
+    assert.equal(state.begins, 5, 'каждая миграция — в отдельной транзакции');
     assert.ok(state.queries.some((q) => q.startsWith('CREATE TABLE IF NOT EXISTS schema_migrations')));
     // Все DDL идемпотентны (безопасно на боевой БД, где таблицы уже есть).
     for (const q of state.queries.filter(isDDL)) {
@@ -104,8 +104,8 @@ describe('runMigrations', () => {
   test('частично применённая БД: выполняются только недостающие миграции', async () => {
     const { sql, state } = createMockSql({ tableExists: true, applied: ['001'] });
     const res = await runMigrations(sql, { log: silent });
-    assert.deepEqual(res.applied, ['002_phase1_stability', '003_phase2_feedback_publishing', '004_phase3b_rules_antidelete']);
-    assert.deepEqual(state.inserted, ['002', '003', '004']);
+    assert.deepEqual(res.applied, ['002_phase1_stability', '003_phase2_feedback_publishing', '004_phase3b_rules_antidelete', '005_phase3b_ai_rp']);
+    assert.deepEqual(state.inserted, ['002', '003', '004', '005']);
     assert.ok(!state.queries.some((q) => q.startsWith('CREATE TABLE IF NOT EXISTS schema_migrations')));
   });
 
@@ -118,14 +118,14 @@ describe('runMigrations', () => {
       return origBegin(fn);
     };
     const res = await runMigrations(sql, { log: silent });
-    assert.deepEqual(res.applied, ['002_phase1_stability', '003_phase2_feedback_publishing', '004_phase3b_rules_antidelete']);
+    assert.deepEqual(res.applied, ['002_phase1_stability', '003_phase2_feedback_publishing', '004_phase3b_rules_antidelete', '005_phase3b_ai_rp']);
     assert.ok(res.skipped.includes('001_initial_schema'));
-    assert.deepEqual(state.inserted, ['002', '003', '004']);
+    assert.deepEqual(state.inserted, ['002', '003', '004', '005']);
   });
 
   test('версии миграций уникальны и упорядочены', () => {
     const versions = MIGRATIONS.map((m) => m.version);
-    assert.deepEqual(versions, ['001', '002', '003', '004']);
+    assert.deepEqual(versions, ['001', '002', '003', '004', '005']);
     assert.deepEqual([...versions].sort(), versions);
   });
 });

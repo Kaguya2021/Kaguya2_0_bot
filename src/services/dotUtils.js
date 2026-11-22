@@ -2,7 +2,8 @@
 
 // --- Парсинг .команды ---
 
-const DOT_COMMAND_RE = /^\.([a-zа-яё]+)(?:\s+([\s\S]*))?$/i;
+// Имя команды начинается с буквы; дальше буквы, цифры и _ (кастомные RP-триггеры).
+const DOT_COMMAND_RE = /^\.([a-zа-яё][a-zа-яё0-9_]*)(?:\s+([\s\S]*))?$/i;
 
 // ".mute" -> { command: 'mute', args: '', raw }; "..", "...", "текст", ". x" -> null.
 export function parseDotCommand(text) {

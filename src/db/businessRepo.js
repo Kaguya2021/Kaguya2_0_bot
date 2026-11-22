@@ -6,6 +6,17 @@ import { cut, strOrNull, normalizeIds } from './helpers.js';
 
 // Neon Free (512 МБ): храним только текст/краткое описание медиа.
 export const MAX_CACHED_CONTENT = 4000;
+export const MAX_AUTO_AI_PROMPT = 500;
+
+function rowToRule(r) {
+  return {
+    isMuted: r.is_muted === true,
+    deleteStickersGifs: r.delete_stickers_gifs === true,
+    autoAiPrompt: r.auto_ai_prompt ?? null,
+    kawaiiEnabled: r.kawaii_enabled === true
+  };
+}
+
 
 export const businessRepo = {
   // info: { connectionId, ownerId, userChatId, canReply, canDeleteSent, canDeleteAll, isEnabled }
@@ -72,36 +83,44 @@ export const businessRepo = {
     };
   },
 
-  setChatRule: async (ownerId, chatId, { isMuted, deleteStickersGifs } = {}) => {
+  // patch: { isMuted, deleteStickersGifs, autoAiPrompt, kawaiiEnabled }.
+  // undefined — не менять поле. autoAiPrompt: null — очистить (NULL), строка — записать (до 500 символов).
+  setChatRule: async (ownerId, chatId, { isMuted, deleteStickersGifs, autoAiPrompt, kawaiiEnabled } = {}) => {
     await ensureSchema();
-    // undefined — не менять поле (COALESCE со старым значением).
     const muted = typeof isMuted === 'boolean' ? isMuted : null;
     const stickers = typeof deleteStickersGifs === 'boolean' ? deleteStickersGifs : null;
+    const kawaii = typeof kawaiiEnabled === 'boolean' ? kawaiiEnabled : null;
+    // Явный null нельзя склеить через COALESCE (иначе .unautoai не очистит поле) — отдельный флаг.
+    const aiTouch = autoAiPrompt !== undefined;
+    const aiValue = typeof autoAiPrompt === 'string' && autoAiPrompt.trim()
+      ? autoAiPrompt.trim().slice(0, MAX_AUTO_AI_PROMPT)
+      : null;
     const res = await sql`
-      INSERT INTO chat_rules (owner_id, chat_id, is_muted, delete_stickers_gifs, updated_at)
-      VALUES (${String(ownerId)}, ${String(chatId)}, ${muted ?? false}, ${stickers ?? false}, CURRENT_TIMESTAMP)
+      INSERT INTO chat_rules (owner_id, chat_id, is_muted, delete_stickers_gifs, auto_ai_prompt, kawaii_enabled, updated_at)
+      VALUES (
+        ${String(ownerId)}, ${String(chatId)}, ${muted ?? false}, ${stickers ?? false},
+        ${aiValue}::text, ${kawaii ?? false}, CURRENT_TIMESTAMP
+      )
       ON CONFLICT (owner_id, chat_id) DO UPDATE SET
         is_muted = COALESCE(${muted}::boolean, chat_rules.is_muted),
         delete_stickers_gifs = COALESCE(${stickers}::boolean, chat_rules.delete_stickers_gifs),
+        auto_ai_prompt = CASE WHEN ${aiTouch}::boolean THEN ${aiValue}::text ELSE chat_rules.auto_ai_prompt END,
+        kawaii_enabled = COALESCE(${kawaii}::boolean, chat_rules.kawaii_enabled),
         updated_at = CURRENT_TIMESTAMP
-      RETURNING is_muted, delete_stickers_gifs;
+      RETURNING is_muted, delete_stickers_gifs, auto_ai_prompt, kawaii_enabled;
     `;
     const r = res[0];
-    return r ? { isMuted: r.is_muted === true, deleteStickersGifs: r.delete_stickers_gifs === true } : null;
+    return r ? rowToRule(r) : null;
   },
 
   getAllActiveChatRules: async () => {
     await ensureSchema();
     const rows = await sql`
-      SELECT owner_id, chat_id, is_muted, delete_stickers_gifs
-      FROM chat_rules WHERE is_muted = true OR delete_stickers_gifs = true;
+      SELECT owner_id, chat_id, is_muted, delete_stickers_gifs, auto_ai_prompt, kawaii_enabled
+      FROM chat_rules
+      WHERE is_muted = true OR delete_stickers_gifs = true OR auto_ai_prompt IS NOT NULL OR kawaii_enabled = true;
     `;
-    return rows.map((r) => ({
-      ownerId: r.owner_id,
-      chatId: r.chat_id,
-      isMuted: r.is_muted === true,
-      deleteStickersGifs: r.delete_stickers_gifs === true
-    }));
+    return rows.map((r) => ({ ownerId: r.owner_id, chatId: r.chat_id, ...rowToRule(r) }));
   },
 
   // msg: { connectionId, chatId, messageId, ownerId, senderId, senderName, senderUsername, msgType, content }
@@ -152,6 +171,79 @@ export const businessRepo = {
       ORDER BY message_id DESC LIMIT ${lim};
     `;
     return rows.map((r) => Number(r.message_id));
+  },
+
+  // Последние N сообщений чата в хронологическом порядке (для .dialog и контекста .autoai).
+  getRecentCachedMessages: async (connectionId, chatId, limit = 20) => {
+    await ensureSchema();
+    const lim = Math.max(1, Math.min(100, Number(limit) || 20));
+    const rows = await sql`
+      SELECT message_id, sender_id, sender_name, sender_username, msg_type, content, created_at FROM (
+        SELECT message_id, sender_id, sender_name, sender_username, msg_type, content, created_at
+        FROM business_messages_cache
+        WHERE connection_id = ${String(connectionId)} AND chat_id = ${String(chatId)}
+        ORDER BY message_id DESC LIMIT ${lim}
+      ) t ORDER BY message_id ASC;
+    `;
+    return rows.map((r) => ({ ...r, message_id: Number(r.message_id) }));
+  },
+
+  // --- Квота ИИ: UTC-сутки (не зависит от TimeZone сессии Postgres) ---
+
+  getAiUsageToday: async (ownerId) => {
+    await ensureSchema();
+    const res = await sql`
+      SELECT requests_count FROM ai_usage
+      WHERE owner_id = ${String(ownerId)} AND usage_date = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date;
+    `;
+    return Number(res[0]?.requests_count ?? 0);
+  },
+
+  // Атомарный инкремент. Возвращает новое значение счётчика за сегодня.
+  incrementAiUsage: async (ownerId) => {
+    await ensureSchema();
+    const res = await sql`
+      INSERT INTO ai_usage (owner_id, usage_date, requests_count)
+      VALUES (${String(ownerId)}, (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date, 1)
+      ON CONFLICT (owner_id, usage_date) DO UPDATE SET requests_count = ai_usage.requests_count + 1
+      RETURNING requests_count;
+    `;
+    return Number(res[0]?.requests_count ?? 0);
+  },
+
+  // --- Кастомные RP-команды ---
+
+  listCustomRp: async (ownerId) => {
+    await ensureSchema();
+    return sql`
+      SELECT trigger, action_text, media_file_id, media_type FROM custom_rp_commands
+      WHERE owner_id = ${String(ownerId)} ORDER BY created_at ASC, trigger ASC;
+    `.then((rows) => rows.map((r) => ({
+      trigger: r.trigger,
+      action_text: r.action_text,
+      media_file_id: r.media_file_id ?? null,
+      media_type: r.media_type ?? null
+    })));
+  },
+
+  upsertCustomRp: async (ownerId, { trigger, actionText, mediaFileId = null, mediaType = null }) => {
+    await ensureSchema();
+    return sql`
+      INSERT INTO custom_rp_commands (owner_id, trigger, action_text, media_file_id, media_type)
+      VALUES (${String(ownerId)}, ${cut(trigger, 50)}, ${cut(actionText, 200)}, ${strOrNull(mediaFileId)}, ${cut(mediaType, 20)})
+      ON CONFLICT (owner_id, trigger) DO UPDATE SET
+        action_text = EXCLUDED.action_text,
+        media_file_id = EXCLUDED.media_file_id,
+        media_type = EXCLUDED.media_type;
+    `;
+  },
+
+  deleteCustomRp: async (ownerId, trigger) => {
+    await ensureSchema();
+    const res = await sql`
+      DELETE FROM custom_rp_commands WHERE owner_id = ${String(ownerId)} AND trigger = ${String(trigger)};
+    `;
+    return (res.count ?? 0) > 0;
   },
 
   pruneOldBusinessMessages: async (days = 7) => {

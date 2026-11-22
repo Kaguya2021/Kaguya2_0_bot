@@ -159,6 +159,33 @@ export const MIGRATIONS = Object.freeze([
       await tx`CREATE INDEX IF NOT EXISTS idx_business_messages_cache_chat_msg ON business_messages_cache (connection_id, chat_id, message_id DESC)`;
       await tx`ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS anti_delete_enabled BOOLEAN DEFAULT true`;
     }
+  },
+  {
+    version: '005',
+    name: 'phase3b_ai_rp',
+    async up(tx) {
+      await tx`ALTER TABLE chat_rules ADD COLUMN IF NOT EXISTS auto_ai_prompt TEXT`;
+      await tx`ALTER TABLE chat_rules ADD COLUMN IF NOT EXISTS kawaii_enabled BOOLEAN DEFAULT false`;
+      await tx`
+        CREATE TABLE IF NOT EXISTS ai_usage (
+          owner_id VARCHAR(50) NOT NULL,
+          usage_date DATE NOT NULL DEFAULT CURRENT_DATE,
+          requests_count INT NOT NULL DEFAULT 0,
+          PRIMARY KEY (owner_id, usage_date)
+        )
+      `;
+      await tx`
+        CREATE TABLE IF NOT EXISTS custom_rp_commands (
+          owner_id VARCHAR(50) NOT NULL,
+          trigger VARCHAR(50) NOT NULL,
+          action_text VARCHAR(200) NOT NULL,
+          media_file_id TEXT,
+          media_type VARCHAR(20),
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (owner_id, trigger)
+        )
+      `;
+    }
   }
 ]);
 

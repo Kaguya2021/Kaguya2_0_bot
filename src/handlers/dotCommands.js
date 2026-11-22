@@ -9,58 +9,43 @@ import { escapeHTML } from '../services/html.js';
 import { switchLayout, parseDurationMs, safeCalc, formatSenderName } from '../services/dotUtils.js';
 import { deleteBusinessNow } from '../services/deleteQueue.js';
 import { setChatRuleInCache, burnTimers } from '../bot/state.js';
+import { notifyOwner, deleteTrigger, chatTitle, RIGHTS_HINT } from './dotShared.js';
+import { AI_COMMANDS, aiHandlers } from './aiCommands.js';
+import { RP_MANAGE_COMMANDS, rpHandlers, executeRp } from './rpCommands.js';
+
+export { notifyOwner, RIGHTS_HINT };
 
 export const DEL_MAX = 50;
 export const BURN_LIMITS = Object.freeze({ minMs: 3000, maxMs: 600_000 });
 
-export const RIGHTS_HINT =
-  'Включите право <b>«Удаление всех сообщений»</b>:\n' +
-  '<i>Настройки → Telegram Business → Чат-боты → @Kaguya_2_0bot</i>';
-
 export const HELP_TEXT =
   '📖 <b>.команды</b> (пишите в любом бизнес-чате, триггер удаляется)\n\n' +
-  '<b>Модерация</b> (отчёт — сюда, в личку):\n' +
+  '🛡 <b>Модерация</b> (отчёт — сюда, в личку):\n' +
   '<code>.mute</code> / <code>.unmute</code> — удалять все сообщения собеседника\n' +
   '<code>.wsag</code> / <code>.unwsag</code> — удалять его стикеры и GIF\n' +
   '<code>.del</code> — удалить отвеченное сообщение (reply) или последнее\n' +
-  '<code>.del N</code> — удалить последние N сообщений (1–50)\n' +
-  '<code>.id</code> — ID чата, собеседника и сообщений\n\n' +
-  '<b>В чат</b>:\n' +
+  '<code>.del N</code> — удалить последние N сообщений (1–50)\n\n' +
+  '🤖 <b>ИИ (Gemini)</b>:\n' +
+  '<code>.ai вопрос</code> — ответ ИИ в чат (или reply на сообщение)\n' +
+  '<code>.autoai инструкция</code> / <code>.unautoai</code> — ИИ отвечает собеседнику за вас\n' +
+  '<code>.dialog [N]</code> — разбор последних N сообщений (5–50) — сюда, в личку\n' +
+  '<code>.kawaii</code> / <code>.unkawaii</code> — переписывать ваши сообщения в аниме-стиле\n\n' +
+  '🧰 <b>Утилиты</b>:\n' +
   '<code>.sw текст</code> — сменить раскладку (или reply на сообщение)\n' +
   '<code>.calc 2*(3+4)</code> — калькулятор\n' +
-  '<code>.burn 30s текст</code> — сообщение, которое удалится само (3с–10м)\n\n' +
+  '<code>.burn 30s текст</code> — сообщение, которое удалится само (3с–10м)\n' +
+  '<code>.id</code> — ID чата, собеседника и сообщений (в личку)\n\n' +
+  '🎭 <b>RP-команды</b> (reply на сообщение — цель, текст после команды — комментарий):\n' +
+  '<code>.обнять</code> <code>.поцеловать</code> <code>.погладить</code> <code>.кусь</code> <code>.пнуть</code> и др.\n' +
+  '<code>.addrp .триггер текст</code> — своя RP (до 3; reply на GIF/стикер — привяжет медиа)\n' +
+  '<code>.myrp</code> — ваши RP · <code>.delrp .триггер</code> — удалить\n\n' +
   '<code>.help</code> — эта шпаргалка';
 
 const COMMANDS = new Set(['mute', 'unmute', 'wsag', 'unwsag', 'del', 'burn', 'sw', 'calc', 'id', 'help']);
 
+// Системные команды (включая ИИ и управление RP) — их нельзя переопределить через .addrp.
 export function isKnownDotCommand(command) {
-  return COMMANDS.has(command);
-}
-
-// Сообщение владельцу в личку бота (не бросает).
-export async function notifyOwner(api, ownerId, html) {
-  try {
-    await api.sendMessage(ownerId, html, { parse_mode: 'HTML', disable_web_page_preview: true });
-    return true;
-  } catch (e) {
-    return false;
-  }
-}
-
-async function deleteTrigger(api, connectionId, messageId) {
-  try {
-    await deleteBusinessNow(api, connectionId, [messageId]);
-    return true;
-  } catch (e) {
-    return false;
-  }
-}
-
-function chatTitle(chat) {
-  if (!chat) return 'чат';
-  const name = [chat.first_name, chat.last_name].filter(Boolean).join(' ') || chat.title || '';
-  const user = chat.username ? ` (@${chat.username})` : '';
-  return `${name || `ID ${chat.id}`}${user}`;
+  return COMMANDS.has(command) || AI_COMMANDS.has(command) || RP_MANAGE_COMMANDS.has(command);
 }
 
 function formatNumber(n) {
@@ -226,9 +211,10 @@ const handlers = {
 };
 
 // Возвращает true, если команда распознана и обработана (дальнейшая логика не нужна).
+// Порядок: системные -> ИИ -> управление RP -> выполнение RP (кастомные, затем встроенные).
 // Неизвестная .команда -> false: сообщение не трогаем, срабатывает обычная пауза автоответа.
 export async function handleDotCommand(ctx, { parsed, businessMessage, connectionId, chatId, ownerId, meta }) {
-  if (!parsed || !isKnownDotCommand(parsed.command)) return false;
+  if (!parsed?.command) return false;
   const c = {
     command: parsed.command,
     args: parsed.args || '',
@@ -238,12 +224,21 @@ export async function handleDotCommand(ctx, { parsed, businessMessage, connectio
     chatId: String(chatId),
     ownerId: String(ownerId),
     messageId: businessMessage.message_id,
-    meta: meta || null
+    meta: meta || null,
+    isReserved: isKnownDotCommand
   };
+  const handler = (COMMANDS.has(c.command) && handlers[c.command]) ||
+    (AI_COMMANDS.has(c.command) && aiHandlers[c.command]) ||
+    (RP_MANAGE_COMMANDS.has(c.command) && rpHandlers[c.command]) ||
+    null;
   try {
-    await handlers[parsed.command](ctx, c);
+    if (handler) {
+      await handler(ctx, c);
+      return true;
+    }
+    return await executeRp(ctx, c);
   } catch (e) {
-    console.error(`❌ .${parsed.command} error:`, e?.description || e?.message || e);
+    console.error(`❌ .${c.command} error:`, e?.description || e?.message || e);
+    return true;
   }
-  return true;
 }
