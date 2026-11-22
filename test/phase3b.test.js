@@ -384,7 +384,7 @@ describe('Business: .команды, мут, анти-удаление', () => {
     const dm = sentTo(calls, OWNER);
     assert.equal(dm.length, 1);
     assert.match(dm[0].payload.text, /Удаление всех сообщений/);
-    assert.match(dm[0].payload.text, /Telegram Business → Чат-боты → @Kaguya_2_0bot/);
+    assert.match(dm[0].payload.text, /Автоматизация чатов → Разрешения для бота/);
   });
 
   test('.wsag удаляет стикер и GIF, но пропускает обычный текст', async () => {

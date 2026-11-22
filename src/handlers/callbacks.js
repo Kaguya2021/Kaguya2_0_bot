@@ -61,7 +61,7 @@ export function registerCallbackHandlers(bot) {
     }
     if (!status.connected) {
       return await ctx.answerCallbackQuery({
-        text: 'Подключение пока не обнаружено. Добавьте бота в Telegram Business → Чат-боты ' +
+        text: 'Подключение пока не обнаружено. Добавьте бота: Настройки → Аккаунт → Автоматизация чатов ' +
           '(или напишите любое сообщение в чате, если бот уже подключён).',
         show_alert: true
       });
@@ -69,7 +69,7 @@ export function registerCallbackHandlers(bot) {
     await ctx.answerCallbackQuery(status.canDeleteAll
       ? { text: '✅ Бизнес-бот активен!' }
       : {
-        text: '✅ Бизнес-бот активен!\n\nДля .mute и .del включите право «Удаление всех сообщений» в Telegram Business → Чат-боты.',
+        text: '✅ Бизнес-бот активен!\n\nДля .mute и .del включите право «Удаление всех сообщений» в Настройки → Аккаунт → Автоматизация чатов → Разрешения для бота.',
         show_alert: true
       });
     await showMainMenu(ctx, { edit: true, connection: status });

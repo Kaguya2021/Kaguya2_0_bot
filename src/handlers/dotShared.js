@@ -3,7 +3,7 @@ import { deleteBusinessNow } from '../services/deleteQueue.js';
 
 export const RIGHTS_HINT =
   'Включите право <b>«Удаление всех сообщений»</b>:\n' +
-  '<i>Настройки → Telegram Business → Чат-боты → @Kaguya_2_0bot</i>';
+  '<i>Настройки → Аккаунт → Автоматизация чатов → Разрешения для бота</i>';
 
 // Сообщение владельцу в личку бота (не бросает).
 export async function notifyOwner(api, ownerId, html) {

@@ -77,11 +77,12 @@ export function buildOnboardingScreen({ botUsername = DEFAULT_BOT_USERNAME, cfg 
   const raw = String(botUsername || DEFAULT_BOT_USERNAME).replace(/^@/, '');
   const at = `@${escapeHTML(raw)}`;
   const text =
-    '🔌 <b>Подключение бизнес-бота</b>\n\n' +
+    '🔌 <b>Подключение бизнес-бота</b>\n' +
+    '🆓 <i>Бесплатно и без Telegram Premium</i>\n\n' +
     '<blockquote>' +
     `1️⃣ Нажмите «Скопировать ${at}» ниже\n` +
-    '2️⃣ Откройте <b>Настройки → Telegram Business → Чат-боты</b>\n' +
-    `3️⃣ Укажите <code>${at}</code> и включите нужные права (для <code>.mute</code> и <code>.del</code> — «Удаление всех сообщений»)\n` +
+    '2️⃣ Откройте <b>Настройки → Аккаунт → Автоматизация чатов</b> <i>(на старых версиях: Telegram Business → Чат-боты)</i>\n' +
+    `3️⃣ Выберите <code>${at}</code>, укажите «Чаты, доступные боту» и в блоке <b>«Разрешения для бота»</b> включите удаление всех сообщений и удаление отправленных сообщений (нужно для <code>.mute</code>, <code>.del</code>, <code>.kawaii</code> и скрытия триггеров)\n` +
     '4️⃣ Нажмите «Добавить» и вернитесь сюда' +
     '</blockquote>\n\n' +
     '<blockquote expandable>✨ <b>Что появится после привязки</b>\n' +

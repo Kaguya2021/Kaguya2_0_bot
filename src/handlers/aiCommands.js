@@ -201,7 +201,7 @@ export const aiHandlers = {
     if (!(await saveRule(ctx, c, { kawaiiEnabled: true }))) return;
     let text = `🌸 Kawaii-режим включён для диалога ${dialogTitle(c)}: ваши сообщения будут переписываться в аниме-стиле (◕‿◕✿)\nВыключить: <code>.unkawaii</code>`;
     if (c.meta && !c.meta.canDeleteSent && !c.meta.canDeleteAll) {
-      text += '\n\n⚠️ У бота нет права <b>«Удаление отправленных сообщений»</b> — исходник не будет удаляться, и в чате окажутся оба варианта.\n<i>Настройки → Telegram Business → Чат-боты → @Kaguya_2_0bot</i>';
+      text += '\n\n⚠️ У бота нет права <b>«Удаление отправленных сообщений»</b> — исходник не будет удаляться, и в чате окажутся оба варианта.\n<i>Настройки → Аккаунт → Автоматизация чатов → Разрешения для бота</i>';
     }
     await notifyOwner(ctx.api, c.ownerId, text + notConfiguredNote());
   },
