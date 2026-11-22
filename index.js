@@ -1,6 +1,18 @@
 import express from 'express';
 import { webhookCallback } from 'grammy';
-import { bot } from './bot.js';
+import { config } from './src/config.js';
+import { createBot, loadBotState } from './src/bot/index.js';
+import { ensureSchema } from './src/db/migrations.js';
+import { createWebhookSecretMiddleware } from './src/services/webhook.js';
+
+const bot = createBot();
+
+const USE_POLLING = config.usePolling;
+const WEBHOOK_SECRET = config.webhookSecret;
+
+if (!USE_POLLING && !WEBHOOK_SECRET) {
+  console.error('🚨 КРИТИЧНО: WEBHOOK_SECRET не задан! /api/webhook принимает запросы без проверки подписи Telegram. Добавьте WEBHOOK_SECRET в переменные окружения Render.');
+}
 
 const app = express();
 app.use(express.json());
@@ -28,18 +40,19 @@ app.get('/', (req, res) => {
   res.send('Кагуя успешно запущена на Render!');
 });
 
-// Обработчик вебхука от Telegram
-app.post('/api/webhook', webhookCallback(bot, 'express'));
+// Обработчик вебхука от Telegram (только в webhook-режиме).
+// Проверка X-Telegram-Bot-Api-Secret-Token выполняется ДО webhookCallback.
+if (!USE_POLLING) {
+  app.post('/api/webhook', createWebhookSecretMiddleware(WEBHOOK_SECRET), webhookCallback(bot, 'express'));
+}
 
-const PORT = process.env.PORT || 3000;
-// Render сам подставляет RENDER_EXTERNAL_URL для каждого веб-сервиса.
-// Если переменная почему-то не пришла — используем актуальный адрес этого сервиса
-// (раньше тут был захардкожен старый/чужой домен, из-за чего вебхук не ставился).
-const RENDER_URL = process.env.RENDER_EXTERNAL_URL || 'https://kaguya2-0-bot-clhl.onrender.com';
+const PORT = config.port;
+// Render сам подставляет RENDER_EXTERNAL_URL для каждого веб-сервиса (fallback — в src/config.js).
+const RENDER_URL = config.renderUrl;
 
 async function setWebhookWithRetry(webhookUrl, attempt = 1) {
   try {
-    await bot.api.setWebhook(webhookUrl);
+    await bot.api.setWebhook(webhookUrl, WEBHOOK_SECRET ? { secret_token: WEBHOOK_SECRET } : undefined);
     console.log(`🔗 Webhook успешно установлен на: ${webhookUrl}`);
   } catch (err) {
     console.error(`❌ Ошибка при установке Webhook (попытка ${attempt}):`, err.message);
@@ -52,10 +65,37 @@ async function setWebhookWithRetry(webhookUrl, attempt = 1) {
   }
 }
 
+// Локальный запуск (Windows и т.п.): USE_POLLING=true — без webhook, через getUpdates.
+async function startPolling() {
+  await bot.api.deleteWebhook();
+  console.log('🔁 Режим polling (USE_POLLING=true): webhook удалён, запускаю bot.start()');
+  const stop = () => bot.stop();
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+  await bot.start({
+    onStart: (info) => console.log(`🤖 Бот @${info.username} запущен в режиме polling`)
+  });
+}
+
+// Миграции БД в фоне (не блокируем старт сервера — Render ждёт открытия порта).
+// Если всё уже применено — один SELECT из schema_migrations, без DDL.
+// Запросы репозиториев дожидаются этого же промиса, поэтому до готовности схемы в БД не пишем.
+ensureSchema();
+
+// Подгружаем персистентное состояние (global_stop) в фоне — не блокируем старт сервера.
+loadBotState();
+
 app.listen(PORT, () => {
   console.log(`🚀 Сервер слушает порт ${PORT}`);
-  console.log(`🌐 Используемый адрес хоста: ${RENDER_URL}`);
 
+  if (USE_POLLING) {
+    startPolling().catch((err) => {
+      console.error('❌ Ошибка запуска polling:', err?.message || err);
+    });
+    return;
+  }
+
+  console.log(`🌐 Используемый адрес хоста: ${RENDER_URL}`);
   const webhookUrl = `${RENDER_URL}/api/webhook`;
   setWebhookWithRetry(webhookUrl);
 });

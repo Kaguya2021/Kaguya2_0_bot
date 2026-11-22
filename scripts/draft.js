@@ -1,0 +1,67 @@
+// Отправка черновика поста на одобрение админу.
+// Использование: npm run draft:send -- drafts/example.json [--admin <ID>]
+//
+// ВАЖНО: скрипт НИКОГДА не публикует в канал и не читает TARGET_CHANNEL_ID.
+// Превью уходит только в личку админу; публикация — только по кнопке в боте.
+import { readFile } from 'node:fs/promises';
+import { Api } from 'grammy';
+import { config } from '../src/config.js';
+import { db, closeDb } from '../src/db/index.js';
+import { validateDraft, buildApprovalKeyboard, buildSendPayload } from '../src/services/publishing.js';
+
+function parseArgs(argv) {
+  const opts = { file: null, admin: null };
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--admin') opts.admin = argv[++i] || '';
+    else if (!opts.file) opts.file = argv[i];
+    else throw new Error(`Лишний аргумент: ${argv[i]}`);
+  }
+  return opts;
+}
+
+async function main() {
+  const opts = parseArgs(process.argv.slice(2));
+  if (!opts.file) throw new Error('Укажите путь к JSON: npm run draft:send -- drafts/example.json [--admin <ID>]');
+  if (!config.botToken) throw new Error('BOT_TOKEN не задан в .env');
+  if (!config.databaseUrl) throw new Error('DATABASE_URL не задан в .env');
+
+  const adminIds = config.adminIdsFromEnv || [];
+  const adminId = opts.admin ?? adminIds[0];
+  if (!adminId || !/^\d+$/.test(adminId)) throw new Error('Не найден ID админа: задайте ADMIN_IDS в .env или --admin <ID>');
+  if (adminIds.length && !adminIds.includes(adminId)) throw new Error(`ID ${adminId} не входит в ADMIN_IDS`);
+
+  let raw;
+  try {
+    raw = JSON.parse(await readFile(opts.file, 'utf8'));
+  } catch (e) {
+    throw new Error(`Не удалось прочитать JSON ${opts.file}: ${e.message}`);
+  }
+
+  const { ok, errors, draft } = validateDraft(raw);
+  if (!ok) throw new Error(`Черновик невалиден:\n  - ${errors.join('\n  - ')}`);
+
+  const saved = await db.createPostDraft({ ...draft, createdBy: adminId });
+  console.log(`📝 Черновик #${saved.id} сохранён (status: ${saved.status})`);
+
+  const api = new Api(config.botToken);
+  const { method, args } = buildSendPayload(draft, adminId, buildApprovalKeyboard(draft.buttons, saved.id));
+  try {
+    const msg = await api[method](...args);
+    console.log(`✅ Превью отправлено админу ${adminId} в личку (message_id: ${msg.message_id}). Публикация — только по кнопке «Опубликовать в канал».`);
+  } catch (e) {
+    // Превью не дошло — черновик не должен висеть в pending_approval без кнопок.
+    await db.markDraftStatus(saved.id, 'failed', null, 'pending_approval').catch(() => {});
+    throw new Error(`Не удалось отправить превью (черновик #${saved.id} помечен failed): ${e?.description || e?.message || e}`);
+  }
+}
+
+let exitCode = 0;
+try {
+  await main();
+} catch (e) {
+  console.error(`❌ ${e?.message || e}`);
+  exitCode = 1;
+} finally {
+  await closeDb().catch(() => {});
+}
+process.exit(exitCode);
