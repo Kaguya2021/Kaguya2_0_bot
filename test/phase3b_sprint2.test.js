@@ -7,6 +7,8 @@ process.env.ADMIN_IDS = '111';
 process.env.DISCUSSION_GROUP_ID = '';
 process.env.TARGET_CHANNEL_ID = '@kaguya_test_channel';
 process.env.DATABASE_URL = '';
+process.env.USERS_COUNT_OFFSET = '0';
+process.env.MENU_BANNER_URL = '';
 delete process.env.REQUIRE_SUBSCRIPTION;
 
 const { config, loadConfig } = await import('../src/config.js');
