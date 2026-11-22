@@ -50,9 +50,24 @@ const PORT = config.port;
 // Render сам подставляет RENDER_EXTERNAL_URL для каждого веб-сервиса (fallback — в src/config.js).
 const RENDER_URL = config.renderUrl;
 
+// Явный список апдейтов: без него Telegram может не присылать бизнес-события
+// (edited/deleted_business_messages, business_connection), если ранее был задан другой список.
+export const ALLOWED_UPDATES = Object.freeze([
+  'message',
+  'edited_message',
+  'callback_query',
+  'business_connection',
+  'business_message',
+  'edited_business_message',
+  'deleted_business_messages'
+]);
+
 async function setWebhookWithRetry(webhookUrl, attempt = 1) {
   try {
-    await bot.api.setWebhook(webhookUrl, WEBHOOK_SECRET ? { secret_token: WEBHOOK_SECRET } : undefined);
+    await bot.api.setWebhook(webhookUrl, {
+      allowed_updates: [...ALLOWED_UPDATES],
+      ...(WEBHOOK_SECRET ? { secret_token: WEBHOOK_SECRET } : {})
+    });
     console.log(`🔗 Webhook успешно установлен на: ${webhookUrl}`);
   } catch (err) {
     console.error(`❌ Ошибка при установке Webhook (попытка ${attempt}):`, err.message);
@@ -73,6 +88,7 @@ async function startPolling() {
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
   await bot.start({
+    allowed_updates: [...ALLOWED_UPDATES],
     onStart: (info) => console.log(`🤖 Бот @${info.username} запущен в режиме polling`)
   });
 }

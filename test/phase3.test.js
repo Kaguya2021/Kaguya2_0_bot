@@ -58,13 +58,13 @@ const isDDL = (q) => /^(CREATE|ALTER|DROP)\b/i.test(q);
 const silent = () => {};
 
 describe('runMigrations', () => {
-  test('пустая БД: создаёт schema_migrations и применяет 001, 002, 003 по порядку', async () => {
+  test('пустая БД: создаёт schema_migrations и применяет 001..004 по порядку', async () => {
     const { sql, state } = createMockSql();
     const res = await runMigrations(sql, { log: silent });
 
-    assert.deepEqual(res.applied, ['001_initial_schema', '002_phase1_stability', '003_phase2_feedback_publishing']);
-    assert.deepEqual(state.inserted, ['001', '002', '003']);
-    assert.equal(state.begins, 3, 'каждая миграция — в отдельной транзакции');
+    assert.deepEqual(res.applied, ['001_initial_schema', '002_phase1_stability', '003_phase2_feedback_publishing', '004_phase3b_rules_antidelete']);
+    assert.deepEqual(state.inserted, ['001', '002', '003', '004']);
+    assert.equal(state.begins, 4, 'каждая миграция — в отдельной транзакции');
     assert.ok(state.queries.some((q) => q.startsWith('CREATE TABLE IF NOT EXISTS schema_migrations')));
     // Все DDL идемпотентны (безопасно на боевой БД, где таблицы уже есть).
     for (const q of state.queries.filter(isDDL)) {
@@ -73,16 +73,19 @@ describe('runMigrations', () => {
     }
     // Ключевые объекты схемы на месте.
     const all = state.queries.join('\n');
-    for (const name of ['user_settings', 'users', 'chat_pauses', 'message_logs', 'bot_state', 'channel_comments', 'post_drafts']) {
+    for (const name of ['user_settings', 'users', 'chat_pauses', 'message_logs', 'bot_state', 'channel_comments', 'post_drafts',
+      'business_connections', 'chat_rules', 'business_messages_cache']) {
       assert.ok(all.includes(`CREATE TABLE IF NOT EXISTS ${name}`), name);
     }
-    for (const col of ['timezone_offset_min', 'auto_off_until', 'blocked_until']) {
+    for (const col of ['timezone_offset_min', 'auto_off_until', 'blocked_until', 'anti_delete_enabled']) {
       assert.ok(all.includes(`ADD COLUMN IF NOT EXISTS ${col}`), col);
     }
     assert.ok(all.includes('ALTER TABLE message_logs ADD COLUMN IF NOT EXISTS status'));
     assert.ok(all.includes('ON channel_comments (status, created_at)'));
     assert.ok(all.includes('ON message_logs (role, status, created_at)'));
     assert.ok(all.includes('ON post_drafts (status)'));
+    assert.ok(all.includes('ON business_messages_cache (created_at)'));
+    assert.ok(all.includes('ON business_messages_cache (connection_id, chat_id, message_id DESC)'));
   });
 
   test('повторный вызов: все версии применены -> один SELECT, ни одной миграции и DDL', async () => {
@@ -101,8 +104,8 @@ describe('runMigrations', () => {
   test('частично применённая БД: выполняются только недостающие миграции', async () => {
     const { sql, state } = createMockSql({ tableExists: true, applied: ['001'] });
     const res = await runMigrations(sql, { log: silent });
-    assert.deepEqual(res.applied, ['002_phase1_stability', '003_phase2_feedback_publishing']);
-    assert.deepEqual(state.inserted, ['002', '003']);
+    assert.deepEqual(res.applied, ['002_phase1_stability', '003_phase2_feedback_publishing', '004_phase3b_rules_antidelete']);
+    assert.deepEqual(state.inserted, ['002', '003', '004']);
     assert.ok(!state.queries.some((q) => q.startsWith('CREATE TABLE IF NOT EXISTS schema_migrations')));
   });
 
@@ -115,14 +118,14 @@ describe('runMigrations', () => {
       return origBegin(fn);
     };
     const res = await runMigrations(sql, { log: silent });
-    assert.deepEqual(res.applied, ['002_phase1_stability', '003_phase2_feedback_publishing']);
+    assert.deepEqual(res.applied, ['002_phase1_stability', '003_phase2_feedback_publishing', '004_phase3b_rules_antidelete']);
     assert.ok(res.skipped.includes('001_initial_schema'));
-    assert.deepEqual(state.inserted, ['002', '003']);
+    assert.deepEqual(state.inserted, ['002', '003', '004']);
   });
 
   test('версии миграций уникальны и упорядочены', () => {
     const versions = MIGRATIONS.map((m) => m.version);
-    assert.deepEqual(versions, ['001', '002', '003']);
+    assert.deepEqual(versions, ['001', '002', '003', '004']);
     assert.deepEqual([...versions].sort(), versions);
   });
 });

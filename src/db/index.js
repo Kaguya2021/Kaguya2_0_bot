@@ -3,11 +3,16 @@ import { withRetry, closeDb, sql } from './client.js';
 import { usersRepo, DEFAULT_USER_SETTINGS } from './usersRepo.js';
 import { stateRepo } from './stateRepo.js';
 import { channelRepo } from './channelRepo.js';
+import { businessRepo } from './businessRepo.js';
 
-// Не повторяем: лог ошибок (best-effort), INSERT черновика и атомарный захват черновика.
-export const NO_RETRY = new Set(['saveErrorLog', 'createPostDraft', 'claimDraftForPublishing']);
+// Не повторяем: лог ошибок и кэш бизнес-сообщений/очистка (best-effort),
+// INSERT черновика и атомарный захват черновика.
+export const NO_RETRY = new Set([
+  'saveErrorLog', 'createPostDraft', 'claimDraftForPublishing',
+  'saveCachedBusinessMessage', 'pruneOldBusinessMessages'
+]);
 
-const rawDb = { ...usersRepo, ...stateRepo, ...channelRepo };
+const rawDb = { ...usersRepo, ...stateRepo, ...channelRepo, ...businessRepo };
 
 export const db = Object.fromEntries(
   Object.entries(rawDb).map(([name, fn]) => [

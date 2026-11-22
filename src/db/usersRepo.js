@@ -11,7 +11,8 @@ export const DEFAULT_USER_SETTINGS = Object.freeze({
   timer_mode: false,
   timezone_offset_min: 0,
   auto_off_until: null,
-  blocked_until: null
+  blocked_until: null,
+  anti_delete_enabled: true
 });
 
 export function normalizeSettings(row) {
@@ -25,7 +26,9 @@ export function normalizeSettings(row) {
     timezone_offset_min: Number(row.timezone_offset_min) || 0,
     // BIGINT приходит из postgres.js строкой
     auto_off_until: toNumOrNull(row.auto_off_until),
-    blocked_until: toNumOrNull(row.blocked_until)
+    blocked_until: toNumOrNull(row.blocked_until),
+    // NULL/нет колонки (старая схема) -> включено по умолчанию
+    anti_delete_enabled: row.anti_delete_enabled !== false
   };
 }
 
@@ -142,7 +145,7 @@ export const usersRepo = {
     try {
       const res = await sql`
         SELECT custom_reply, start_time, end_time, allowed_username, timer_mode,
-               timezone_offset_min, auto_off_until, blocked_until
+               timezone_offset_min, auto_off_until, blocked_until, anti_delete_enabled
         FROM user_settings WHERE user_id = ${userId};
       `;
       return normalizeSettings(res[0]);
@@ -185,6 +188,16 @@ export const usersRepo = {
       VALUES (${userId}, ${timestampMsOrNull})
       ON CONFLICT (user_id)
       DO UPDATE SET blocked_until = EXCLUDED.blocked_until;
+    `;
+  },
+
+  setAntiDeleteEnabled: async (userId, enabled) => {
+    await ensureSchema();
+    return sql`
+      INSERT INTO user_settings (user_id, anti_delete_enabled)
+      VALUES (${userId}, ${enabled === true})
+      ON CONFLICT (user_id)
+      DO UPDATE SET anti_delete_enabled = EXCLUDED.anti_delete_enabled;
     `;
   }
 };

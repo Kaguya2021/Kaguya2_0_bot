@@ -131,13 +131,14 @@ export function registerCallbackHandlers(bot) {
   bot.callbackQuery('settings_menu', async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = String(ctx.from.id);
-    let allowedUsername;
+    let settings;
     try {
-      allowedUsername = (await getSettings(userId)).allowed_username;
+      settings = await getSettings(userId);
     } catch (e) {
       return await ctx.reply('⚠️ База данных временно недоступна, попробуйте позже.');
     }
 
+    const allowedUsername = settings.allowed_username;
     const statusLine = allowedUsername
       ? `🔗 Сейчас автоответчик работает только для <code>@${escapeHTML(allowedUsername)}</code>.`
       : '🔓 Сейчас автоответчик работает для всех, без ограничений.';
@@ -146,9 +147,33 @@ export function registerCallbackHandlers(bot) {
       '⚙️ <b>Настройки</b>\n\n' +
       'Здесь можно ограничить автоответчик так, чтобы он отвечал только одному конкретному аккаунту.\n\n' +
       `${statusLine}\n\n` +
-      'Чтобы снять ограничение — отправьте команду <code>/no us</code>.',
-      { parse_mode: 'HTML', reply_markup: getSettingsInlineKeyboard() }
+      'Чтобы снять ограничение — отправьте команду <code>/no us</code>.\n\n' +
+      '👁 <b>Анти-удаление</b> — присылать сюда сообщения, которые собеседник удалил или отредактировал.',
+      { parse_mode: 'HTML', reply_markup: getSettingsInlineKeyboard(settings) }
     );
+  });
+
+  bot.callbackQuery('toggle_antidelete', async (ctx) => {
+    const userId = String(ctx.from.id);
+    const current = (await getSettingsSafe(userId)).anti_delete_enabled !== false;
+    const next = !current;
+    try {
+      await db.setAntiDeleteEnabled(userId, next);
+      patchSettings(userId, { anti_delete_enabled: next });
+    } catch (e) {
+      return await ctx.answerCallbackQuery({ text: '⚠️ База данных недоступна, попробуйте ещё раз.', show_alert: true });
+    }
+
+    await ctx.answerCallbackQuery({
+      text: next
+        ? '👁 Анти-удаление включено: удалённые и изменённые сообщения будут приходить сюда.'
+        : '🙈 Анти-удаление выключено.'
+    });
+    try {
+      await ctx.editMessageReplyMarkup({
+        reply_markup: getSettingsInlineKeyboard({ ...(await getSettingsSafe(userId)), anti_delete_enabled: next })
+      });
+    } catch (e) {}
   });
 
   bot.callbackQuery('settings_add_account', async (ctx) => {

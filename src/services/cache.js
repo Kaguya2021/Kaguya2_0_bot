@@ -95,6 +95,8 @@ export function createBotCaches(intervalMs = CLEANUP_INTERVAL) {
     stepState: new BoundedCache({ maxSize: 5000, ttlMs: 60 * 60 * 1000 }).startCleanup(intervalMs),
     // business_connection_id -> ownerId
     connectionOwners: new BoundedCache({ maxSize: 5000, ttlMs: 24 * 60 * 60 * 1000 }).startCleanup(intervalMs),
+    // business_connection_id -> { ownerId, userChatId, canReply, canDeleteSent, canDeleteAll, isEnabled }
+    connectionMeta: new BoundedCache({ maxSize: 5000, ttlMs: 24 * 60 * 60 * 1000 }).startCleanup(intervalMs),
     // userId -> полный объект настроек (в т.ч. дефолтный, если строки в БД нет)
     userSettingsCache: new BoundedCache({ maxSize: 5000, ttlMs: 30 * 60 * 1000 }).startCleanup(intervalMs)
   };

@@ -113,6 +113,52 @@ export const MIGRATIONS = Object.freeze([
       await tx`CREATE INDEX IF NOT EXISTS idx_message_logs_role_status_created ON message_logs (role, status, created_at)`;
       await tx`CREATE INDEX IF NOT EXISTS idx_post_drafts_status ON post_drafts (status)`;
     }
+  },
+  {
+    version: '004',
+    name: 'phase3b_rules_antidelete',
+    async up(tx) {
+      await tx`
+        CREATE TABLE IF NOT EXISTS business_connections (
+          connection_id VARCHAR(150) PRIMARY KEY,
+          owner_id VARCHAR(50) NOT NULL,
+          user_chat_id VARCHAR(50),
+          can_reply BOOLEAN DEFAULT false,
+          can_delete_sent_messages BOOLEAN DEFAULT false,
+          can_delete_all_messages BOOLEAN DEFAULT false,
+          is_enabled BOOLEAN DEFAULT true,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `;
+      await tx`
+        CREATE TABLE IF NOT EXISTS chat_rules (
+          owner_id VARCHAR(50) NOT NULL,
+          chat_id VARCHAR(50) NOT NULL,
+          is_muted BOOLEAN DEFAULT false,
+          delete_stickers_gifs BOOLEAN DEFAULT false,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (owner_id, chat_id)
+        )
+      `;
+      await tx`
+        CREATE TABLE IF NOT EXISTS business_messages_cache (
+          connection_id VARCHAR(150) NOT NULL,
+          chat_id VARCHAR(50) NOT NULL,
+          message_id BIGINT NOT NULL,
+          owner_id VARCHAR(50) NOT NULL,
+          sender_id VARCHAR(50),
+          sender_name VARCHAR(200),
+          sender_username VARCHAR(100),
+          msg_type VARCHAR(30) DEFAULT 'text',
+          content TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (connection_id, chat_id, message_id)
+        )
+      `;
+      await tx`CREATE INDEX IF NOT EXISTS idx_business_messages_cache_created ON business_messages_cache (created_at)`;
+      await tx`CREATE INDEX IF NOT EXISTS idx_business_messages_cache_chat_msg ON business_messages_cache (connection_id, chat_id, message_id DESC)`;
+      await tx`ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS anti_delete_enabled BOOLEAN DEFAULT true`;
+    }
   }
 ]);
 

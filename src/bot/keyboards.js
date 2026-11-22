@@ -30,9 +30,11 @@ export function getMainInlineKeyboard(userId, settings) {
   return kb;
 }
 
-export function getSettingsInlineKeyboard() {
+export function getSettingsInlineKeyboard(settings) {
+  const antiDeleteOn = settings?.anti_delete_enabled !== false;
   return new InlineKeyboard()
     .text('➕ Добавить аккаунт', 'settings_add_account').row()
+    .text(`👁 Анти-удаление: ${antiDeleteOn ? 'ВКЛ' : 'ВЫКЛ'}`, 'toggle_antidelete').row()
     .text('⬅️ Назад в меню', 'settings_back');
 }
 

@@ -10,7 +10,10 @@ export function isIgnorableTelegramError(err) {
     description.includes('blocked by the user') ||
     description.includes('user is deactivated') ||
     description.includes('chat not found') ||
-    description.includes('bot was kicked')
+    description.includes('bot was kicked') ||
+    // Business: собеседник/подключение недоступны (чат удалён, бот отключён) — шум, не ошибка.
+    description.includes('BUSINESS_PEER_INVALID') ||
+    description.includes('BUSINESS_CONNECTION_INVALID')
   );
 }
 
