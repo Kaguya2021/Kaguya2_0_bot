@@ -9,6 +9,7 @@ import { registerCommandHandlers } from '../handlers/commands.js';
 import { registerCallbackHandlers } from '../handlers/callbacks.js';
 import { registerPrivateStepHandlers } from '../handlers/privateSteps.js';
 import { registerBusinessHandlers } from '../handlers/business.js';
+import { registerGameCallbacks } from '../handlers/gameCommands.js';
 
 export { loadBotState, stopCacheCleanup } from './state.js';
 
@@ -49,6 +50,8 @@ export function createBot(token = config.botToken, botOptions = undefined) {
   //    чтобы /start, /reset, /chatid и т.п. не проваливались в stepState.
   registerAdminHandlers(bot);
   registerCommandHandlers(bot);
+  // Кнопки мини-игр (g:*) — ДО гейта подписки: их жмут оба участника бизнес-чата.
+  registerGameCallbacks(bot);
   registerCallbackHandlers(bot);
   // 3. Пошаговая настройка в личке (bot.on('message')) — только private-чаты.
   registerPrivateStepHandlers(bot);

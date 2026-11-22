@@ -13,7 +13,10 @@ const { config, loadConfig } = await import('../src/config.js');
 const {
   checkUserSubscription, clearSubscriptionCache, isSubscriptionGateActive, getChannelUrl, isMemberStatus
 } = await import('../src/services/subscription.js');
-const { buildOnboardingScreen, buildSubscriptionScreen, buildMainMenuScreen, pluralUsers } = await import('../src/services/screens.js');
+const {
+  buildOnboardingScreen, buildSubscriptionScreen, buildMainMenuScreen, buildAutoReplyMenuScreen, pluralUsers
+} = await import('../src/services/screens.js');
+const { buildScreenMessage } = await import('../src/bot/menu.js');
 const { HELP_TEXT } = await import('../src/handlers/dotCommands.js');
 const { db, DEFAULT_USER_SETTINGS } = await import('../src/db/index.js');
 const { createBot, stopCacheCleanup } = await import('../src/bot/index.js');
@@ -174,31 +177,108 @@ describe('экраны', () => {
     assert.equal(pluralUsers(22), 'пользователя');
   });
 
-  test('buildMainMenuScreen: карточка профиля, статус подключения, старые кнопки сохранены', () => {
+  test('buildMainMenuScreen: карточка профиля, статус подключения, компактные кнопки', () => {
     const now = Date.UTC(2026, 10, 22);
     const created = new Date(Date.UTC(2026, 10, 12));
-    const { text, reply_markup } = buildMainMenuScreen({
+    const { text, reply_markup, banner } = buildMainMenuScreen({
       userId: '5', settings: { ...DEFAULT_USER_SETTINGS }, profile: { created_at: created }, usersCount: 10,
-      connection: { connected: true, canDeleteAll: false }, now
+      connection: { connected: true, canDeleteAll: false }, now, cfg: gateCfg
     });
-    assert.match(text, /Первое появление: <b>12\.11\.2026<\/b> \(с нами 10 дн\.\)/);
-    assert.match(text, /Пользователей в боте: <b>10<\/b>/);
+    assert.equal(banner, true);
+    assert.match(text, /^✨ <b>Kaguya 2\.0<\/b>\n\n<blockquote>👤 <b>Профиль<\/b>/);
+    assert.match(text, /📅 В боте с <b>12\.11\.2026<\/b> \(10 дн\.\)/);
+    assert.match(text, /👥 Пользователей: <b>10<\/b>/);
     assert.match(text, /🟢 Активен · ⚠️ без прав \.mute/);
-    assert.match(text, /Автоответчик: <b>ВКЛ<\/b> · 👁 Анти-удаление: <b>ВКЛ<\/b>/);
-    assert.match(text, /<i>Все входящие удалённые/);
+    assert.match(text, /💬 Автоответ: <b>ВКЛ<\/b> · 👁 Анти-удаление: <b>ВКЛ<\/b><\/blockquote>/);
+    assert.match(text, /<\/blockquote>\n\n<i>.+<\/i>$/);
+
+    const rows = reply_markup.inline_keyboard;
+    assert.deepEqual(rows[0].map((b) => b.callback_data), ['open_autoreply_menu', 'show_dot_commands']);
+    assert.deepEqual(rows[1].map((b) => b.callback_data), ['toggle_autoreply', 'settings_menu']);
+    assert.equal(rows[1][0].text, '🔕 Пауза 5 мин');
+    assert.equal(rows[2][0].callback_data, 'open_onboarding');
+    assert.equal(rows[2][1].url, 'https://t.me/kaguya_test_channel');
+    assert.equal(rows.length, 3, 'не-админ: без ADMINPPA');
     const data = allButtons(reply_markup).map((b) => b.callback_data);
-    for (const cb of ['toggle_autoreply', 'set_text', 'set_voice', 'set_combo', 'my_reply', 'set_time', 'reset_reply',
-      'toggle_timer_mode', 'settings_menu', 'show_dot_commands', 'open_onboarding']) {
-      assert.ok(data.includes(cb), cb);
+    for (const cb of ['set_text', 'set_voice', 'set_combo', 'my_reply', 'set_time', 'reset_reply', 'toggle_timer_mode']) {
+      assert.ok(!data.includes(cb), `${cb} перенесён в подменю`);
     }
+
+    const admin = buildMainMenuScreen({ userId: '111', settings: { ...DEFAULT_USER_SETTINGS }, cfg: { ...gateCfg, targetChannelId: '' } });
+    const adminRows = admin.reply_markup.inline_keyboard;
+    assert.equal(adminRows[2].length, 1, 'без канала — только «Подключение»');
+    assert.equal(adminRows.at(-1)[0].callback_data, 'admin_panel');
 
     const off = buildMainMenuScreen({
       userId: '5', settings: { ...DEFAULT_USER_SETTINGS, anti_delete_enabled: false, auto_off_until: Date.now() + 60_000 },
-      profile: { created_at: null }, connection: { connected: false }
+      profile: { created_at: null }, connection: { connected: false }, cfg: gateCfg
     });
     assert.match(off.text, /⚪ Не подключён/);
-    assert.match(off.text, /Автоответчик: <b>ВЫКЛ<\/b> · 👁 Анти-удаление: <b>ВЫКЛ<\/b>/);
-    assert.doesNotMatch(off.text, /Первое появление|Пользователей в боте|Все входящие/);
+    assert.match(off.text, /Автоответ: <b>ВЫКЛ<\/b> · 👁 Анти-удаление: <b>ВЫКЛ<\/b>/);
+    assert.doesNotMatch(off.text, /В боте с|Пользователей|<i>/);
+    assert.equal(off.reply_markup.inline_keyboard[1][0].text, '🔔 Включить автоответ');
+    assert.match(buildMainMenuScreen({ userId: '5', connection: null }).text, /❔ Нет данных/);
+  });
+
+  test('buildMainMenuScreen: 0 дн. -> (сегодня)', () => {
+    const now = Date.UTC(2026, 10, 22, 18);
+    const { text } = buildMainMenuScreen({
+      userId: '5', settings: { ...DEFAULT_USER_SETTINGS }, profile: { created_at: new Date(Date.UTC(2026, 10, 22, 9)) }, now, cfg: gateCfg
+    });
+    assert.match(text, /📅 В боте с <b>22\.11\.2026<\/b> \(сегодня\)/);
+    assert.doesNotMatch(text, /0 дн\./);
+  });
+
+  test('usersCountOffset: прибавляется на экране подписки и в главном меню', () => {
+    const cfg = { ...gateCfg, usersCountOffset: 1400 };
+    assert.match(buildSubscriptionScreen({ usersCount: 16, cfg }).text, /Уже с нами: <b>1 416<\/b> пользователей/);
+    assert.match(buildMainMenuScreen({ userId: '5', usersCount: 16, cfg }).text, /👥 Пользователей: <b>1 416<\/b>/);
+    // 0 из БД + offset -> показываем; null (БД недоступна) -> строки нет
+    assert.match(buildSubscriptionScreen({ usersCount: 0, cfg }).text, /Уже с нами: <b>1 400<\/b>/);
+    assert.doesNotMatch(buildSubscriptionScreen({ usersCount: null, cfg }).text, /Уже с нами/);
+    assert.doesNotMatch(buildMainMenuScreen({ userId: '5', usersCount: null, cfg }).text, /Пользователей/);
+    assert.match(buildMainMenuScreen({ userId: '5', usersCount: 16, cfg: gateCfg }).text, /Пользователей: <b>16<\/b>/, 'без offset');
+  });
+
+  test('buildAutoReplyMenuScreen: статус и все прежние callback_data', () => {
+    const { text, reply_markup } = buildAutoReplyMenuScreen({ settings: { ...DEFAULT_USER_SETTINGS, timer_mode: true, custom_reply: 'voice:abc' } });
+    assert.match(text, /💬 <b>Автоответчик<\/b>\n\n<blockquote>/);
+    assert.match(text, /🟢 Включён/);
+    assert.match(text, /Таймер 15 мин: <b>ВКЛ<\/b>/);
+    assert.match(text, /голосовое/);
+    const rows = reply_markup.inline_keyboard.map((r) => r.map((b) => b.callback_data));
+    assert.deepEqual(rows, [
+      ['set_text', 'set_voice'], ['set_combo', 'my_reply'], ['set_time', 'toggle_timer_mode'], ['reset_reply'], ['open_main_menu']
+    ]);
+    assert.equal(reply_markup.inline_keyboard[2][1].text, '⏱ Таймер 15м: ВКЛ');
+
+    const def = buildAutoReplyMenuScreen({ settings: { ...DEFAULT_USER_SETTINGS } });
+    assert.match(def.text, /Таймер 15 мин: <b>ОТКЛ<\/b>/);
+    assert.match(def.text, /стандартный/);
+    assert.equal(def.reply_markup.inline_keyboard[2][1].text, '⏱ Таймер 15м: ОТКЛ');
+  });
+
+  test('баннер: MENU_BANNER_URL -> невидимая ссылка + превью над текстом; пусто -> is_disabled', () => {
+    const url = 'https://cdn.example/banner.jpg?a=1&b=2';
+    const screen = { text: 'X', banner: true };
+    const on = buildScreenMessage(screen, { menuBannerUrl: url });
+    assert.equal(on.text, '<a href="https://cdn.example/banner.jpg?a=1&amp;b=2">&#8205;</a>X');
+    assert.deepEqual(on.link_preview_options, { url, prefer_large_media: true, show_above_text: true, is_disabled: false });
+
+    assert.deepEqual(buildScreenMessage(screen, { menuBannerUrl: '' }), { text: 'X', link_preview_options: { is_disabled: true } });
+    assert.deepEqual(buildScreenMessage({ text: 'X' }, { menuBannerUrl: url }), { text: 'X', link_preview_options: { is_disabled: true } },
+      'экран без banner: true');
+    assert.equal(buildSubscriptionScreen({ cfg: gateCfg }).banner, true);
+    assert.equal(buildOnboardingScreen().banner, true);
+  });
+
+  test('config: USERS_COUNT_OFFSET и MENU_BANNER_URL', () => {
+    assert.equal(loadConfig({}).usersCountOffset, 0);
+    assert.equal(loadConfig({ USERS_COUNT_OFFSET: ' 1400 ' }).usersCountOffset, 1400);
+    for (const bad of ['-5', '1.5', 'abc']) assert.equal(loadConfig({ USERS_COUNT_OFFSET: bad }).usersCountOffset, 0, bad);
+    assert.equal(loadConfig({}).menuBannerUrl, '');
+    assert.equal(loadConfig({ MENU_BANNER_URL: ' https://x.example/b.png ' }).menuBannerUrl, 'https://x.example/b.png');
+    assert.equal(loadConfig({ MENU_BANNER_URL: 'http://x.example/b.png' }).menuBannerUrl, '');
   });
 });
 
@@ -317,7 +397,7 @@ describe('Воронка: /start и callback-кнопки', () => {
     store.members.set('203', 'administrator');
     store.connections.set('203', { connected: true, canReply: true, canDeleteSent: true, canDeleteAll: true, updatedAt: new Date() });
     await bot.handleUpdate(callbackUpdate(203, 'check_sub'));
-    assert.match(lastScreen(calls).payload.text, /Главное меню/);
+    assert.match(lastScreen(calls).payload.text, /Kaguya 2\.0/);
     assert.match(lastScreen(calls).payload.text, /🟢 Активен/);
   });
 
@@ -326,7 +406,7 @@ describe('Воронка: /start и callback-кнопки', () => {
     store.members.set('204', 'member');
     store.settings.set('204', { custom_reply: 'привет' });
     await bot.handleUpdate(startUpdate(204));
-    assert.match(lastScreen(calls).payload.text, /Главное меню/);
+    assert.match(lastScreen(calls).payload.text, /Kaguya 2\.0/);
     assert.match(lastScreen(calls).payload.text, /⚪ Не подключён/);
   });
 
@@ -342,7 +422,7 @@ describe('Воронка: /start и callback-кнопки', () => {
     assert.match(answers(calls).at(-1).payload.text, /✅ Бизнес-бот активен!/);
     assert.match(answers(calls).at(-1).payload.text, /Удаление всех сообщений/);
     const s = lastScreen(calls);
-    assert.match(s.payload.text, /Главное меню/);
+    assert.match(s.payload.text, /Kaguya 2\.0/);
     assert.match(s.payload.text, /без прав \.mute/);
   });
 
@@ -356,8 +436,56 @@ describe('Воронка: /start и callback-кнопки', () => {
     await bot.handleUpdate(callbackUpdate(206, 'open_onboarding'));
     assert.match(lastScreen(calls).payload.text, /Подключение бизнес-бота/);
     await bot.handleUpdate(callbackUpdate(206, 'open_main_menu'));
-    assert.match(lastScreen(calls).payload.text, /Главное меню/);
+    assert.match(lastScreen(calls).payload.text, /Kaguya 2\.0/);
     assert.equal(calls.filter((c) => c.method === 'getChatMember').length, 1, 'подписка — из кэша');
+  });
+
+  test('open_autoreply_menu -> подменю со старыми callback_data; toggle_timer_mode обновляет на месте; open_main_menu -> назад', async () => {
+    const { bot, calls } = makeBot();
+    store.members.set('209', 'member');
+    await bot.handleUpdate(callbackUpdate(209, 'open_autoreply_menu'));
+    let s = lastScreen(calls);
+    assert.equal(s.method, 'editMessageText');
+    assert.match(s.payload.text, /Автоответчик/);
+    assert.deepEqual(s.payload.link_preview_options, { is_disabled: true });
+    const data = buttonsOf(s).map((b) => b.callback_data);
+    for (const cb of ['set_text', 'set_voice', 'set_combo', 'my_reply', 'set_time', 'toggle_timer_mode', 'reset_reply', 'open_main_menu']) {
+      assert.ok(data.includes(cb), cb);
+    }
+
+    db.setTimerMode = async () => {};
+    await bot.handleUpdate(callbackUpdate(209, 'toggle_timer_mode'));
+    s = lastScreen(calls);
+    assert.equal(s.method, 'editMessageText');
+    assert.match(s.payload.text, /Таймер 15 мин: <b>ВКЛ<\/b>/);
+    assert.ok(buttonsOf(s).some((b) => b.text === '⏱ Таймер 15м: ВКЛ'));
+
+    await bot.handleUpdate(callbackUpdate(209, 'open_main_menu'));
+    s = lastScreen(calls);
+    assert.match(s.payload.text, /Kaguya 2\.0/);
+    assert.equal(buttonsOf(s)[0].callback_data, 'open_autoreply_menu');
+  });
+
+  test('старые callback_data и алиасы show_my/open_settings работают; settings_back редактирует экран', async () => {
+    const { bot, calls } = makeBot();
+    store.members.set('210', 'member');
+    for (const cb of ['my_reply', 'show_my']) {
+      await bot.handleUpdate(callbackUpdate(210, cb));
+      assert.match(lastScreen(calls).payload.text, /дефолтный текст/, cb);
+    }
+    for (const cb of ['settings_menu', 'open_settings']) {
+      await bot.handleUpdate(callbackUpdate(210, cb));
+      assert.match(lastScreen(calls).payload.text, /⚙️ <b>Настройки<\/b>/, cb);
+    }
+    await bot.handleUpdate(callbackUpdate(210, 'set_text'));
+    assert.match(lastScreen(calls).payload.text, /Напишите текст автоответа/);
+    await bot.handleUpdate(callbackUpdate(210, 'set_time'));
+    assert.ok(lastScreen(calls).payload.text.length > 0);
+
+    await bot.handleUpdate(callbackUpdate(210, 'settings_back'));
+    const s = lastScreen(calls);
+    assert.equal(s.method, 'editMessageText');
+    assert.match(s.payload.text, /Kaguya 2\.0/);
   });
 
   test('гейт на callback: отписанный видит экран подписки, обработчик не вызывается', async () => {
