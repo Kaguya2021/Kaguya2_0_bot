@@ -45,5 +45,5 @@ export function getWelcomeInlineKeyboard() {
   return new InlineKeyboard()
     .url('📢 Подписаться на канал', 'https://t.me/kaguya_2_0_bots')
     .row()
-    .url('🔗 КАК ПОДКЛЮЧИТЬ', 'https://kaguya-gospoja.onrender.com');
+    .url('🔗 КАК ПОДКЛЮЧИТЬ', 'https://threatux.github.io/kaguya-site/');
 }

@@ -19,7 +19,7 @@ export function parseAdminIds(raw) {
 
 // Чистая функция: env -> объект конфига (тестируется без побочных эффектов).
 // Ссылка на гайд по подключению, если GUIDE_URL не задан.
-export const DEFAULT_GUIDE_URL = 'https://kaguya-gospoja.onrender.com';
+export const DEFAULT_GUIDE_URL = 'https://threatux.github.io/kaguya-site/';
 
 // Положительное целое из env, иначе дефолт.
 export function parsePositiveInt(raw, fallback) {

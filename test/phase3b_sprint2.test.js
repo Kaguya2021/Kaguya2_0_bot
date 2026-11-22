@@ -45,7 +45,7 @@ describe('config: подписка и ссылки', () => {
     assert.equal(loadConfig({}).requireSubscription, false);
     assert.equal(loadConfig({ TARGET_CHANNEL_ID: '@ch' }).requireSubscription, true);
     assert.equal(loadConfig({ TARGET_CHANNEL_ID: '@ch', REQUIRE_SUBSCRIPTION: 'false' }).requireSubscription, false);
-    assert.equal(loadConfig({}).guideUrl, 'https://kaguya-gospoja.onrender.com');
+    assert.equal(loadConfig({}).guideUrl, 'https://threatux.github.io/kaguya-site/');
     assert.equal(loadConfig({ GUIDE_URL: 'https://g.example' }).guideUrl, 'https://g.example');
     assert.equal(loadConfig({}).channelInviteUrl, '');
     assert.equal(isSubscriptionGateActive(config), true);
